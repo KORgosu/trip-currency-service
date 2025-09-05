@@ -9,7 +9,7 @@ pipeline {
     // Jenkins에 설정한 도구들
     tools {
         // SonarQube Scanner 도구
-        'hudson.plugins.sonar.SonarRunnerInstallation' 'My SonarQube Scanner'
+        'hudson.plugins.sonar.SonarRunnerInstallation' 'My SonarQube'
         // Python 도구 (Jenkins에 Python이 설치되어 있다면)
         // 'hudson.plugins.python.PythonInstallation' 'Python3'
     }
