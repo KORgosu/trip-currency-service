@@ -70,7 +70,7 @@ pipeline {
         stage('SonarQube Analysis') {
             steps {
                 script {
-                    def scannerHome = tool 'My SonarQube Scanner'
+                    def scannerHome = tool 'My SonarQube'
                     withSonarQubeEnv('My SonarQube') {
                         sh "'${scannerHome}/bin/sonar-scanner' -Dsonar.projectKey=trip-currency-service -Dsonar.sources=. -Dsonar.host.url=http://sonarqube:9000"
                     }
@@ -123,7 +123,7 @@ pipeline {
     agent any
 
     tools {
-        'hudson.plugins.sonar.SonarRunnerInstallation' 'My SonarQube Scanner'
+        'hudson.plugins.sonar.SonarRunnerInstallation' 'My SonarQube'
     }
 
     environment {
