@@ -48,8 +48,8 @@ pipeline {
                         echo "Creating virtual environment..."
                         python3 -m venv venv || python -m venv venv
                         
-                        # 가상환경 활성화
-                        source venv/bin/activate
+                        # 가상환경 활성화 (. 명령어 사용)
+                        . venv/bin/activate
                         echo "Virtual environment activated"
                         
                         # Python 및 pip 버전 확인
@@ -73,7 +73,7 @@ pipeline {
                     steps {
                         dir('services/currency-service') {
                             sh '''
-                                source venv/bin/activate
+                                . venv/bin/activate
                                 flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
                                 flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
                             '''
@@ -85,7 +85,7 @@ pipeline {
                     steps {
                         dir('services/currency-service') {
                             sh '''
-                                source venv/bin/activate
+                                . venv/bin/activate
                                 black --check --diff .
                             '''
                         }
@@ -96,7 +96,7 @@ pipeline {
                     steps {
                         dir('services/currency-service') {
                             sh '''
-                                source venv/bin/activate
+                                . venv/bin/activate
                                 isort --check-only --diff .
                             '''
                         }
@@ -107,7 +107,7 @@ pipeline {
                     steps {
                         dir('services/currency-service') {
                             sh '''
-                                source venv/bin/activate
+                                . venv/bin/activate
                                 mypy currency_service.py --ignore-missing-imports
                             '''
                         }
@@ -118,7 +118,7 @@ pipeline {
                     steps {
                         dir('services/currency-service') {
                             sh '''
-                                source venv/bin/activate
+                                . venv/bin/activate
                                 bandit -r . -f json -o bandit-report.json || true
                                 bandit -r . -ll
                             '''
@@ -133,7 +133,7 @@ pipeline {
             steps {
                 dir('services/currency-service') {
                     sh '''
-                        source venv/bin/activate
+                        . venv/bin/activate
                         pytest test_currency_service.py -v --junitxml=test-results.xml --cov=currency_service --cov-report=xml:coverage.xml --cov-report=html:htmlcov
                     '''
                 }
@@ -187,7 +187,7 @@ pipeline {
             steps {
                 dir('services/currency-service') {
                     sh '''
-                        source venv/bin/activate
+                        . venv/bin/activate
                         python currency_service.py
                     '''
                 }
