@@ -1,0 +1,43 @@
+pipeline {
+    agent any
+
+    // Jenkins에 설정한 SonarQube Scanner 도구 이름
+    tools {
+        sonarScanner 'My SonarQube Scanner'
+    }
+
+    stages {
+        // 1단계: GitHub에서 코드 가져오기
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        // 2단계: Docker 이미지 빌드하기
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    def dockerImage = docker.build("dummy-service:${env.BUILD_ID}", "./services/dummy-service")
+                }
+            }
+        }
+
+        // 3단계: SonarQube로 코드 분석하기
+        stage('SonarQube Analysis') {
+            steps {
+                // Jenkins에 설정한 SonarQube 서버 정보 사용
+                withSonarQubeEnv('My SonarQube') {
+                    // SonarQube 스캐너 실행
+                    sh '''
+                        sonar-scanner \
+                        -Dsonar.projectKey=trip-currency-service \
+                        -Dsonar.sources=. \
+                        -Dsonar.host.url=http://sonarqube:9000 \
+                        -Dsonar.token=$SONAR_AUTH_TOKEN
+                    '''
+                }
+            }
+        }
+    }
+}
