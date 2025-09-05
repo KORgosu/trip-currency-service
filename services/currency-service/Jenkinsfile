@@ -3,7 +3,7 @@ pipeline {
 
     // Jenkins에 설정한 SonarQube Scanner 도구 이름
     tools {
-        sonarScanner 'My SonarQube Scanner'
+        sonar 'My SonarQube Scanner'
     }
 
     stages {
