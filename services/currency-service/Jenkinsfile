@@ -85,9 +85,6 @@ pipeline {
             script {
                 try {
                     dir('services/currency-service') {
-                        // sh 'rm -rf venv'
-                        
-                        // 임시 파일 정리
                         sh 'find . -type f -name "*.pyc" -delete || true'
                         sh 'find . -type d -name "__pycache__" -delete || true'
                     }
@@ -113,58 +110,3 @@ pipeline {
         }
     }
 }
-
-/*
-Docker를 사용하지 않는 경우의 대안 Jenkinsfile: 일단 보류함함
-
-pipeline {
-    agent any
-
-    tools {
-        'hudson.plugins.sonar.SonarRunnerInstallation' 'My SonarQube'
-    }
-
-    environment {
-        PYTHON_VERSION = '3.9'
-        VIRTUAL_ENV = "${WORKSPACE}/services/currency-service/venv"
-        PATH = "${VIRTUAL_ENV}/bin:${PATH}"
-    }
-
-    stages {
-        stage('Checkout') {
-            steps {
-                checkout scm
-                dir('services/currency-service') {
-                    echo "Working directory: ${pwd()}"
-                }
-            }
-        }
-
-        stage('Setup Python Environment') {
-            steps {
-                dir('services/currency-service') {
-                    sh '''
-                        # Python 설치 확인
-                        which python3 || which python || (echo "Python not found" && exit 1)
-                        
-                        # Python 명령어 결정
-                        if command -v python3 >/dev/null 2>&1; then
-                            PYTHON_CMD="python3"
-                        else
-                            PYTHON_CMD="python"
-                        fi
-                        
-                        # 가상환경 생성
-                        $PYTHON_CMD -m venv venv
-                        source venv/bin/activate
-                        pip install --upgrade pip
-                        pip install -r requirements.txt
-                    '''
-                }
-            }
-        }
-
-        // 나머지 단계들은 동일...
-    }
-}
-*/
