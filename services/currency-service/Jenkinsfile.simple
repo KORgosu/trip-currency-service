@@ -1,0 +1,135 @@
+// 간단한 버전 - Jenkins에 Python이 이미 설치되어 있는 경우
+pipeline {
+    agent any
+
+    tools {
+        'hudson.plugins.sonar.SonarRunnerInstallation' 'My SonarQube Scanner'
+    }
+
+    environment {
+        VIRTUAL_ENV = "${WORKSPACE}/services/currency-service/venv"
+        PATH = "${VIRTUAL_ENV}/bin:${PATH}"
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+                dir('services/currency-service') {
+                    echo "Working directory: ${pwd()}"
+                }
+            }
+        }
+
+        stage('Setup Python Environment') {
+            steps {
+                dir('services/currency-service') {
+                    sh '''
+                        # Python 확인
+                        python3 --version || python --version
+                        
+                        # 가상환경 생성
+                        python3 -m venv venv || python -m venv venv
+                        source venv/bin/activate
+                        
+                        # 의존성 설치
+                        pip install --upgrade pip
+                        pip install -r requirements.txt
+                    '''
+                }
+            }
+        }
+
+        stage('Code Quality Check') {
+            parallel {
+                stage('Linting') {
+                    steps {
+                        dir('services/currency-service') {
+                            sh '''
+                                source venv/bin/activate
+                                flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127
+                            '''
+                        }
+                    }
+                }
+                
+                stage('Formatting') {
+                    steps {
+                        dir('services/currency-service') {
+                            sh '''
+                                source venv/bin/activate
+                                black --check .
+                            '''
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Unit Tests') {
+            steps {
+                dir('services/currency-service') {
+                    sh '''
+                        source venv/bin/activate
+                        pytest test_currency_service.py -v --junitxml=test-results.xml --cov=currency_service --cov-report=xml:coverage.xml
+                    '''
+                }
+            }
+            post {
+                always {
+                    dir('services/currency-service') {
+                        archiveArtifacts artifacts: 'test-results.xml', fingerprint: true
+                        archiveArtifacts artifacts: 'coverage.xml', fingerprint: true
+                    }
+                }
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            steps {
+                dir('services/currency-service') {
+                    withSonarQubeEnv('My SonarQube') {
+                        sh '''
+                            sonar-scanner \
+                            -Dsonar.projectKey=currency-service \
+                            -Dsonar.projectName=Currency Service \
+                            -Dsonar.projectVersion=${BUILD_NUMBER} \
+                            -Dsonar.sources=. \
+                            -Dsonar.tests=. \
+                            -Dsonar.python.coverage.reportPaths=coverage.xml \
+                            -Dsonar.python.xunit.reportPath=test-results.xml \
+                            -Dsonar.exclusions=**/__pycache__/**,**/*.pyc,**/venv/** \
+                            -Dsonar.host.url=http://sonarqube:9000 \
+                            -Dsonar.token=$SONAR_AUTH_TOKEN
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Application Test') {
+            steps {
+                dir('services/currency-service') {
+                    sh '''
+                        source venv/bin/activate
+                        python currency_service.py
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            echo 'Pipeline completed'
+        }
+        
+        success {
+            echo 'Pipeline succeeded!'
+        }
+        
+        failure {
+            echo 'Pipeline failed!'
+        }
+    }
+}
