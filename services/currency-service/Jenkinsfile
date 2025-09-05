@@ -1,10 +1,17 @@
 pipeline {
     agent any
 
-    // Jenkins에 설정한 SonarQube Scanner 도구 이름
+    // Jenkins에 설정한 도구들
     tools {
-    // 도구 이름에 .(점)이 포함되어 있으므로, 반드시 따옴표로 감싸야 합니다.
+        // SonarQube Scanner 도구
         'hudson.plugins.sonar.SonarRunnerInstallation' 'My SonarQube Scanner'
+    }
+
+    // 환경 변수 설정
+    environment {
+        PYTHON_VERSION = '3.9'
+        VIRTUAL_ENV = "${WORKSPACE}/venv"
+        PATH = "${VIRTUAL_ENV}/bin:${PATH}"
     }
 
     stages {
@@ -12,33 +19,196 @@ pipeline {
         stage('Checkout') {
             steps {
                 checkout scm
-            }
-        }
-
-        // 2단계: Docker 이미지 빌드하기
-        stage('Build Docker Image') {
-            steps {
                 script {
-                    def dockerImage = docker.build("dummy-service:${env.BUILD_ID}", "./services/dummy-service")
+                    // 작업 디렉토리로 이동
+                    dir('services/currency-service') {
+                        echo "Working directory: ${pwd()}"
+                    }
                 }
             }
         }
 
-        // 3단계: SonarQube로 코드 분석하기
-        stage('SonarQube Analysis') {
+        // 2단계: Python 환경 설정
+        stage('Setup Python Environment') {
             steps {
-                // Jenkins에 설정한 SonarQube 서버 정보 사용
-                withSonarQubeEnv('My SonarQube') {
-                    // SonarQube 스캐너 실행
+                dir('services/currency-service') {
+                    script {
+                        // Python 가상환경 생성
+                        sh '''
+                            python3 -m venv venv
+                            source venv/bin/activate
+                            python --version
+                            pip --version
+                        '''
+                        
+                        // 의존성 설치
+                        sh '''
+                            source venv/bin/activate
+                            pip install --upgrade pip
+                            pip install -r requirements.txt
+                        '''
+                    }
+                }
+            }
+        }
+
+        // 3단계: 코드 품질 검사 (정적 분석)
+        stage('Code Quality Check') {
+            parallel {
+                stage('Linting (flake8)') {
+                    steps {
+                        dir('services/currency-service') {
+                            sh '''
+                                source venv/bin/activate
+                                flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+                                flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+                            '''
+                        }
+                    }
+                }
+                
+                stage('Code Formatting (black)') {
+                    steps {
+                        dir('services/currency-service') {
+                            sh '''
+                                source venv/bin/activate
+                                black --check --diff .
+                            '''
+                        }
+                    }
+                }
+                
+                stage('Import Sorting (isort)') {
+                    steps {
+                        dir('services/currency-service') {
+                            sh '''
+                                source venv/bin/activate
+                                isort --check-only --diff .
+                            '''
+                        }
+                    }
+                }
+                
+                stage('Type Checking (mypy)') {
+                    steps {
+                        dir('services/currency-service') {
+                            sh '''
+                                source venv/bin/activate
+                                mypy currency_service.py --ignore-missing-imports
+                            '''
+                        }
+                    }
+                }
+                
+                stage('Security Check (bandit)') {
+                    steps {
+                        dir('services/currency-service') {
+                            sh '''
+                                source venv/bin/activate
+                                bandit -r . -f json -o bandit-report.json || true
+                                bandit -r . -ll
+                            '''
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4단계: 단위 테스트 실행
+        stage('Unit Tests') {
+            steps {
+                dir('services/currency-service') {
                     sh '''
-                        sonar-scanner \
-                        -Dsonar.projectKey=trip-currency-service \
-                        -Dsonar.sources=. \
-                        -Dsonar.host.url=http://sonarqube:9000 \
-                        -Dsonar.token=$SONAR_AUTH_TOKEN
+                        source venv/bin/activate
+                        pytest test_currency_service.py -v --junitxml=test-results.xml --cov=currency_service --cov-report=xml:coverage.xml --cov-report=html:htmlcov
                     '''
                 }
             }
+            post {
+                always {
+                    // 테스트 결과 아카이브
+                    dir('services/currency-service') {
+                        archiveArtifacts artifacts: 'test-results.xml', fingerprint: true
+                        archiveArtifacts artifacts: 'coverage.xml', fingerprint: true
+                        publishHTML([
+                            allowMissing: false,
+                            alwaysLinkToLastBuild: true,
+                            keepAll: true,
+                            reportDir: 'htmlcov',
+                            reportFiles: 'index.html',
+                            reportName: 'Coverage Report'
+                        ])
+                    }
+                }
+            }
+        }
+
+        // 5단계: SonarQube 코드 분석
+        stage('SonarQube Analysis') {
+            steps {
+                dir('services/currency-service') {
+                    // Jenkins에 설정한 SonarQube 서버 정보 사용
+                    withSonarQubeEnv('My SonarQube') {
+                        // SonarQube 스캐너 실행
+                        sh '''
+                            sonar-scanner \
+                            -Dsonar.projectKey=currency-service \
+                            -Dsonar.projectName=Currency Service \
+                            -Dsonar.projectVersion=${BUILD_NUMBER} \
+                            -Dsonar.sources=. \
+                            -Dsonar.tests=. \
+                            -Dsonar.python.coverage.reportPaths=coverage.xml \
+                            -Dsonar.python.xunit.reportPath=test-results.xml \
+                            -Dsonar.exclusions=**/__pycache__/**,**/*.pyc,**/venv/**,**/.pytest_cache/** \
+                            -Dsonar.host.url=http://sonarqube:9000 \
+                            -Dsonar.token=$SONAR_AUTH_TOKEN
+                        '''
+                    }
+                }
+            }
+        }
+
+        // 6단계: 애플리케이션 실행 테스트
+        stage('Application Test') {
+            steps {
+                dir('services/currency-service') {
+                    sh '''
+                        source venv/bin/activate
+                        python currency_service.py
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            // 빌드 후 정리 작업
+            dir('services/currency-service') {
+                script {
+                    // 가상환경 정리 (선택사항)
+                    // sh 'rm -rf venv'
+                    
+                    // 임시 파일 정리
+                    sh 'find . -type f -name "*.pyc" -delete'
+                    sh 'find . -type d -name "__pycache__" -delete'
+                }
+            }
+        }
+        
+        success {
+            echo 'Pipeline succeeded!'
+            // 성공 시 알림 (Slack, Email 등)
+        }
+        
+        failure {
+            echo 'Pipeline failed!'
+            // 실패 시 알림
+        }
+        
+        unstable {
+            echo 'Pipeline unstable!'
+            // 불안정한 빌드 알림
         }
     }
 }
