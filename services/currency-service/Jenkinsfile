@@ -82,11 +82,9 @@ pipeline {
 
     post {
         always {
-            // 빌드 후 정리 작업
             script {
                 try {
                     dir('services/currency-service') {
-                        // 가상환경 정리 (선택사항)
                         // sh 'rm -rf venv'
                         
                         // 임시 파일 정리
