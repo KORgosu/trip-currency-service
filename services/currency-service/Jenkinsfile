@@ -117,7 +117,7 @@ pipeline {
 }
 
 /*
-Docker를 사용하지 않는 경우의 대안 Jenkinsfile:
+Docker를 사용하지 않는 경우의 대안 Jenkinsfile: 일단 보류함함
 
 pipeline {
     agent any
