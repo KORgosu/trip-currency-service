@@ -72,8 +72,7 @@ pipeline {
                 script {
                     def scannerHome = tool 'My SonarQube Scanner'
                     withSonarQubeEnv('My SonarQube') {
-                        // -Dsonar.token=... 부분을 완전히 삭제
-                        sh "'${scannerHome}/bin/sonar-scanner' -Dsonar.projectKey=trip-currency-service -Dsonar.sources=. -Dsonar.host.url=http://sonarqube:9000"
+                        sh "'${scannerHome}/bin/sonar-scanner' -Dsonar.projectKey=trip-currency-service -Dsonar.sources=. -Dsonar.host.url=http://sonarqube:9000 -Dsonar.token=$SONAR_AUTH_TOKEN"
                     }
                 }
             }
