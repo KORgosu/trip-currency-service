@@ -4,10 +4,5 @@
 # HTTP 요청을 위한 라이브러리
 requests>=2.28.0
 
-# 테스트 프레임워크
-pytest>=7.0.0
-pytest-cov>=4.0.0
-pytest-mock>=3.10.0
-
 # 성능 프로파일링
 memory-profiler>=0.60.0

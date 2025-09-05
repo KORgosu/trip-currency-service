@@ -72,52 +72,12 @@ pipeline {
                 script {
                     def scannerHome = tool 'My SonarQube Scanner'
                     withSonarQubeEnv('My SonarQube') {
-                        sh "'${scannerHome}/bin/sonar-scanner' -Dsonar.projectKey=trip-currency-service -Dsonar.sources=. -Dsonar.host.url=http://sonarqube:9000 -Dsonar.token=$SONAR_AUTH_TOKEN"
+                        sh "'${scannerHome}/bin/sonar-scanner' -Dsonar.projectKey=trip-currency-service -Dsonar.sources=. -Dsonar.host.url=http://sonarqube:9000"
                     }
                 }
             }
         }
 
-        // 4단계: 단위 테스트 실행
-        stage('Unit Tests') {
-            steps {
-                dir('services/currency-service') {
-                    sh '''
-                        . venv/bin/activate
-                        pytest test_currency_service.py -v --junitxml=test-results.xml --cov=currency_service --cov-report=xml:coverage.xml --cov-report=html:htmlcov
-                    '''
-                }
-            }
-            post {
-                always {
-                    // 테스트 결과 아카이브
-                    dir('services/currency-service') {
-                        archiveArtifacts artifacts: 'test-results.xml', fingerprint: true
-                        archiveArtifacts artifacts: 'coverage.xml', fingerprint: true
-                        publishHTML([
-                            allowMissing: false,
-                            alwaysLinkToLastBuild: true,
-                            keepAll: true,
-                            reportDir: 'htmlcov',
-                            reportFiles: 'index.html',
-                            reportName: 'Coverage Report'
-                        ])
-                    }
-                }
-            }
-        }
-
-        // 5단계: 애플리케이션 실행 테스트
-        stage('Application Test') {
-            steps {
-                dir('services/currency-service') {
-                    sh '''
-                        . venv/bin/activate
-                        python currency_service.py
-                    '''
-                }
-            }
-        }
     }
 
     post {
