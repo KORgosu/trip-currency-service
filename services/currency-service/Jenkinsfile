@@ -69,15 +69,11 @@ pipeline {
         // 3단계: SonarQube 코드 품질 분석
         stage('SonarQube Analysis') {
             steps {
-                dir('services/currency-service') {
-                    script {
-                        // 1. Global Tool Configuration에 등록한 스캐너의 설치 경로를 가져와 변수에 저장합니다.
-                        def scannerHome = tool 'My SonarQube Scanner'
-                        
-                        // 2. withSonarQubeEnv 블록 안에서, 위에서 찾은 경로를 이용해 스캐너를 실행합니다.
-                        withSonarQubeEnv('My SonarQube') {
-                            sh "'${scannerHome}/bin/sonar-scanner' -Dsonar.projectKey=currency-service -Dsonar.projectName=Currency Service -Dsonar.projectVersion=${BUILD_NUMBER} -Dsonar.sources=. -Dsonar.tests=. -Dsonar.python.coverage.reportPaths=coverage.xml -Dsonar.python.xunit.reportPath=test-results.xml -Dsonar.exclusions=**/__pycache__/**,**/*.pyc,**/venv/**,**/.pytest_cache/** -Dsonar.host.url=http://sonarqube:9000 -Dsonar.token=$SONAR_AUTH_TOKEN"
-                        }
+                script {
+                    def scannerHome = tool 'My SonarQube Scanner'
+                    withSonarQubeEnv('My SonarQube') {
+                        // -Dsonar.token=... 부분을 완전히 삭제
+                        sh "'${scannerHome}/bin/sonar-scanner' -Dsonar.projectKey=trip-currency-service -Dsonar.sources=. -Dsonar.host.url=http://sonarqube:9000"
                     }
                 }
             }
