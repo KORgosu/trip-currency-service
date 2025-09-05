@@ -3,7 +3,8 @@ pipeline {
 
     // Jenkins에 설정한 SonarQube Scanner 도구 이름
     tools {
-        sonar 'My SonarQube Scanner'
+    // 도구 이름에 .(점)이 포함되어 있으므로, 반드시 따옴표로 감싸야 합니다.
+        'hudson.plugins.sonar.SonarRunnerInstallation' 'My SonarQube Scanner'
     }
 
     stages {
