@@ -58,9 +58,9 @@ class CurrencyService:
         통화를 변환합니다.
         
         Args:
-            amount: 변환할 금액
-            from_currency: 원본 통화 코드
-            to_currency: 대상 통화 코드
+            # amount: 변환할 금액
+            # from_currency: 원본 통화 코드
+            # to_currency: 대상 통화 코드
             
         Returns:
             변환된 금액 또는 None (변환 실패 시)
