@@ -23,6 +23,7 @@ class CurrencyCode(str, Enum):
     HKD = "HKD"
     SGD = "SGD"
     KRW = "KRW"
+    PRICE_INDEX = "PRICE-INDEX"  # 물가 지수 조회용 특별 코드
 
 
 class CountryCode(str, Enum):

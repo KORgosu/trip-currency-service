@@ -10,7 +10,12 @@ from typing import Dict, List, Any, Optional
 
 import sys
 import os
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../..'))
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+shared_dir = os.path.join(parent_dir, 'shared')
+
+sys.path.insert(0, parent_dir)
+sys.path.insert(0, shared_dir)
 
 from shared.database import MySQLHelper, RedisHelper, get_db_manager
 from shared.logging import get_logger

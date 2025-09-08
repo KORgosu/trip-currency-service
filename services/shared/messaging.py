@@ -4,9 +4,14 @@ Kafka와 SQS를 지원하는 통합 메시징 인터페이스
 """
 import json
 import asyncio
+import platform
 from typing import Dict, Any, Optional, Callable, List
 from datetime import datetime
 import uuid
+
+# Windows 운영체제일 경우, asyncio 정책을 변경하여 SelectorEventLoop를 사용하도록 설정
+if platform.system() == "Windows":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from .config import get_config, Environment
 from .exceptions import MessagingError
@@ -23,14 +28,9 @@ def get_logger_safe():
 # 전역 로거 초기화 (지연 로딩)
 logger = get_logger_safe()
 
-try:
-    from aiokafka import AIOKafkaProducer, AIOKafkaConsumer
-    from aiokafka.errors import KafkaError
-    KAFKA_AVAILABLE = True
-    logger.info("aiokafka successfully imported")
-except ImportError as e:
-    KAFKA_AVAILABLE = False
-    logger.warning("aiokafka not available, Kafka functionality disabled", error=str(e))
+# Kafka import (실시간 서비스에서만 사용)
+KAFKA_AVAILABLE = False
+logger.info("Kafka disabled for local development, using SQS only")
 
 try:
     import boto3

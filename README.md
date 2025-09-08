@@ -418,6 +418,3 @@ MIT License - 자세한 내용은 [LICENSE](LICENSE) 파일을 참조하세요.
 ---
 
 **Currency Travel Service** - 여행자를 위한 스마트한 환율 정보 서비스 💱🌍
-
-
-변경경

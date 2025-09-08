@@ -264,29 +264,54 @@ async def get_price_index(
 @app.get("/api/v1/currencies/{currency_code}", response_model=SuccessResponse)
 async def get_currency_info(
     currency_code: str,
-    provider: CurrencyProvider = Depends(get_currency_provider)
+    country: Optional[str] = Query(None, description="국가 코드 (price-index 전용)"),
+    base_country: str = Query("KR", description="기준 국가 코드 (price-index 전용)"),
+    currency_provider: CurrencyProvider = Depends(get_currency_provider),
+    price_provider: PriceIndexProvider = Depends(get_price_index_provider)
 ):
     """
-    통화별 상세 정보 조회
-    
-    - **currency_code**: 3자리 통화 코드 (예: USD)
+    통화별 상세 정보 조회 또는 물가 지수 조회
+
+    - **currency_code**: 3자리 통화 코드 (예: USD) 또는 "price-index"
+    - **country**: 물가 지수 조회 시 대상 국가 코드 (예: JP)
+    - **base_country**: 물가 지수 조회 시 기준 국가 코드 (기본값: KR)
     """
     try:
         # 통화 코드 검증
         currency_code = currency_code.upper()
+
+        # price-index 특별 처리
+        if currency_code == "PRICE-INDEX":
+            if not country:
+                raise HTTPException(status_code=400, detail="country parameter is required for price-index")
+
+            # 국가 코드 검증
+            country = country.upper()
+            base_country = base_country.upper()
+
+            if country not in [c.value for c in CountryCode]:
+                raise InvalidCountryCodeError(country)
+            if base_country not in [c.value for c in CountryCode]:
+                raise InvalidCountryCodeError(base_country)
+
+            # 물가 지수 조회
+            price_index = await price_provider.get_price_index(country, base_country)
+            return SuccessResponse(data=price_index)
+
+        # 일반 통화 정보 조회
         if currency_code not in [c.value for c in CurrencyCode]:
             raise InvalidCurrencyCodeError(currency_code)
-        
+
         # 통화 정보 조회
-        currency_info = await provider.get_currency_info(currency_code)
-        
+        currency_info = await currency_provider.get_currency_info(currency_code)
+
         return SuccessResponse(data=currency_info)
-        
+
     except BaseServiceException:
         raise
     except Exception as e:
-        logger.error(f"Failed to get currency info for {currency_code}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to retrieve currency information")
+        logger.error(f"Failed to get info for {currency_code}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve information")
 
 
 # AWS Lambda 핸들러 (배포 시 사용)

@@ -423,6 +423,28 @@ class RedisHelper:
             logger.warning(f"Redis exists failed: {e}")
             return False
 
+    async def set(self, key: str, value: str, ttl: int = None):
+        """문자열 데이터를 Redis에 저장"""
+        if not self.client:
+            logger.warning("Redis client not available, skipping set")
+            return
+
+        try:
+            await self.client.set(key, value, ex=ttl)
+        except Exception as e:
+            logger.warning(f"Redis set failed: {e}")
+
+    async def get(self, key: str) -> Optional[str]:
+        """Redis에서 문자열 데이터 조회"""
+        if not self.client:
+            return None
+
+        try:
+            return await self.client.get(key)
+        except Exception as e:
+            logger.warning(f"Redis get failed: {e}")
+            return None
+
 
 class MySQLHelper:
     """MySQL 작업 헬퍼"""
