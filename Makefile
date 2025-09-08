@@ -68,7 +68,7 @@ start:
 	@echo "  - Currency Service: http://localhost:8001"
 	@echo "  - Ranking Service: http://localhost:8002"
 	@echo "  - History Service: http://localhost:8003"
-	@echo "  - Kafka UI: http://localhost:8080"
+	@echo "  - Kafka UI: http://localhost:8081"
 	@echo "  - MySQL: localhost:3306"
 	@echo "  - Redis: localhost:6379"
 	@echo "  - LocalStack: http://localhost:4566"
@@ -273,7 +273,7 @@ status:
 # 모니터링 대시보드 정보
 monitor:
 	@echo "📊 Monitoring Dashboards:"
-	@echo "  - Kafka UI: http://localhost:8080"
+	@echo "  - Kafka UI: http://localhost:8081"
 	@echo "  - LocalStack Dashboard: http://localhost:4566"
 	@echo "  - Currency Service Health: http://localhost:8001/health"
 	@echo "  - Ranking Service Health: http://localhost:8002/health"
