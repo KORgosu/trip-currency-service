@@ -46,17 +46,27 @@ class ComprehensiveTester:
         self.session = None
         self.results: List[TestResult] = []
         
-        # 환경 설정
+        # TODO: AWS 실시간 서비스 변경 - 로컬 연결에서 AWS 서비스 연결로 변경
+        # - db_config: Aurora MySQL 클러스터 엔드포인트로 변경
+        # - redis_url: ElastiCache Redis 엔드포인트로 변경
+        # - localstack_endpoint: 실제 AWS 서비스 엔드포인트로 변경 또는 제거
+        # AWS 배포 시 수정 필요사항:
+        # 1. Aurora 클러스터 엔드포인트 및 인증 정보 설정
+        # 2. ElastiCache Redis 엔드포인트 설정
+        # 3. DynamoDB, S3, SQS 실제 엔드포인트 사용
+        # 4. VPC 내에서 서비스 간 통신 설정
+
+        # 현재: 로컬 개발 환경 설정
         self.db_config = {
-            'host': 'localhost',
+            'host': 'localhost',  # AWS 실시간 시 Aurora 엔드포인트로 변경
             'port': 3306,
-            'user': 'currency_user',
-            'password': 'password',
+            'user': 'currency_user',  # AWS 실시간 시 실제 사용자명으로 변경
+            'password': 'password',  # AWS 실시간 시 Secrets Manager 사용
             'db': 'currency_db'
         }
-        
-        self.redis_url = "redis://localhost:6379"
-        self.localstack_endpoint = "http://localhost:4566"
+
+        self.redis_url = "redis://localhost:6379"  # AWS 실시간 시 ElastiCache 엔드포인트로 변경
+        self.localstack_endpoint = "http://localhost:4566"  # AWS 실시간 시 실제 서비스 엔드포인트로 변경
     
     async def __aenter__(self):
         self.session = aiohttp.ClientSession()
@@ -395,13 +405,18 @@ class ComprehensiveTester:
         try:
             # Data Ingestor 단일 실행
             start_time = time.time()
-            
+
+            # PYTHONPATH 설정하여 import 경로 문제 해결
+            env = os.environ.copy()
+            env["EXECUTION_MODE"] = "single"
+            env["PYTHONPATH"] = os.path.abspath(".")
+
             result = subprocess.run([
-                "python", "services/data-ingestor/main.py"
-            ], 
-            env={**os.environ, "EXECUTION_MODE": "single"},
-            capture_output=True, 
-            text=True, 
+                sys.executable, "services/data-ingestor/main.py"
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
             timeout=120  # 2분 타임아웃
             )
             
@@ -434,12 +449,17 @@ class ComprehensiveTester:
         try:
             # Step 1: Data Ingestor 실행
             print("   Step 1: Running data collection...")
+            # PYTHONPATH 설정하여 import 경로 문제 해결
+            env = os.environ.copy()
+            env["EXECUTION_MODE"] = "single"
+            env["PYTHONPATH"] = os.path.abspath(".")
+
             ingestor_result = subprocess.run([
-                "python", "services/data-ingestor/main.py"
-            ], 
-            env={**os.environ, "EXECUTION_MODE": "single"},
-            capture_output=True, 
-            text=True, 
+                sys.executable, "services/data-ingestor/main.py"
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
             timeout=60
             )
             

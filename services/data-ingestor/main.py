@@ -6,13 +6,22 @@ import os
 import sys
 import asyncio
 import signal
+import platform
 from datetime import datetime, timedelta
 from typing import Optional
+
+# Windows 운영체제일 경우, asyncio 정책을 변경하여 SelectorEventLoop를 사용하도록 설정
+if platform.system() == "Windows":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 # 상위 디렉토리의 shared 모듈 import를 위한 경로 추가
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
 shared_dir = os.path.join(parent_dir, 'shared')
+
+# 프로젝트 루트 경로 추가 (app 폴더를 찾기 위해)
+project_root = os.path.abspath(os.path.join(current_dir, '..', '..'))
+sys.path.insert(0, project_root)
 
 sys.path.insert(0, parent_dir)
 sys.path.insert(0, shared_dir)
@@ -23,12 +32,47 @@ from shared.database import init_database, get_db_manager
 from shared.utils import SecurityUtils
 from shared.exceptions import BaseServiceException
 
+# config 초기화 (import 전에 해야 함)
+config = init_config("data-ingestor")
+
 # TODO: import 경로 문제 해결 - PYTHONPATH 설정 또는 sys.path 추가
 # - app 디렉토리 경로 추가: sys.path.append(os.path.join(os.path.dirname(__file__), 'app'))
 # - services/data-ingestor/app/services/data_processor.py 존재 확인
-from app.services.data_collector import DataCollector
-from app.services.data_processor import DataProcessor
-from app.scheduler import DataIngestionScheduler
+import sys
+import os
+
+# 절대 경로를 사용하여 import
+current_dir = os.path.dirname(os.path.abspath(__file__))
+app_dir = os.path.join(current_dir, 'app')
+services_dir = os.path.join(app_dir, 'services')
+
+# 경로 추가
+sys.path.insert(0, current_dir)
+sys.path.insert(0, app_dir)
+sys.path.insert(0, services_dir)
+
+# import 시도
+try:
+    from app.services.data_collector import DataCollector
+    from app.services.data_processor import DataProcessor
+    from app.scheduler import DataIngestionScheduler
+except ImportError as e:
+    print(f"Import error: {e}")
+    print(f"Current directory: {current_dir}")
+    print(f"App directory: {app_dir}")
+    print(f"Services directory: {services_dir}")
+    print(f"Python path: {sys.path}")
+
+    # 파일 존재 확인
+    data_collector_path = os.path.join(services_dir, 'data_collector.py')
+    data_processor_path = os.path.join(services_dir, 'data_processor.py')
+    scheduler_path = os.path.join(app_dir, 'scheduler.py')
+
+    print(f"Data collector exists: {os.path.exists(data_collector_path)}")
+    print(f"Data processor exists: {os.path.exists(data_processor_path)}")
+    print(f"Scheduler exists: {os.path.exists(scheduler_path)}")
+
+    raise
 
 # 전역 변수
 data_collector: Optional[DataCollector] = None
@@ -73,24 +117,35 @@ async def initialize_services():
 async def cleanup_services():
     """서비스 정리"""
     global data_collector, data_processor, scheduler
-    
+
     try:
         if scheduler:
             await scheduler.stop()
-        
+
         if data_collector:
             await data_collector.close()
-        
+
         if data_processor:
             await data_processor.close()
-        
+
         db_manager = get_db_manager()
         await db_manager.close()
-        
-        logger.info("Data Ingestor Service stopped")
-        
+
+        # 로거가 정의되지 않은 경우를 대비하여 print 사용
+        try:
+            from shared.logging import get_logger
+            logger = get_logger(__name__)
+            logger.info("Data Ingestor Service stopped")
+        except:
+            print("Data Ingestor Service stopped")
+
     except Exception as e:
-        logger.error("Error during cleanup", error=e)
+        try:
+            from shared.logging import get_logger
+            logger = get_logger(__name__)
+            logger.error("Error during cleanup", error=e)
+        except:
+            print(f"Error during cleanup: {e}")
 
 
 def signal_handler(signum, frame):

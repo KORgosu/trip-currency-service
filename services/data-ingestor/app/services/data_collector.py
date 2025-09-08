@@ -10,7 +10,12 @@ import json
 
 import sys
 import os
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../..'))
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+shared_dir = os.path.join(parent_dir, 'shared')
+
+sys.path.insert(0, parent_dir)
+sys.path.insert(0, shared_dir)
 
 from shared.models import CollectionResult, RawExchangeRateData
 from shared.exceptions import ExternalAPIError, DataValidationError
