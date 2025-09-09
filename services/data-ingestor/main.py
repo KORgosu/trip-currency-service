@@ -1,6 +1,29 @@
 """
 Data Ingestor Service - 외부 데이터 수집 및 처리 서비스
 CronJob으로 실행되는 배치 작업 (로컬에서는 스케줄러로 실행)
+
+주요 기능:
+- 다중 외부 API에서 환율 데이터 수집 (한국은행, Fed, ECB, BOJ)
+- 데이터 검증 및 정제
+- MySQL/Aurora에 데이터 저장
+- Redis 캐시 업데이트
+- Kafka/SQS로 실시간 스트리밍
+
+실행 모드:
+- single: 단일 실행 (테스트용)
+- scheduler: 지속적 스케줄러 실행 (로컬 개발용)
+- cronjob: Kubernetes CronJob 실행 (운영용)
+
+수집 주기:
+- 기본: 5분마다 실행
+- 한국은행 API: 실시간 환율 데이터
+- ExchangeRate-API: 백업 데이터 소스
+- Fixer.io: 추가 백업 데이터 소스
+
+문제점 (수정 필요):
+- 중복 데이터 필터링 로직이 너무 엄격함 (1시간 내 동일 환율은 중복 처리)
+- Fixer API 호출 실패
+- MySQL 연결 실패 시에도 계속 진행하는 로직 개선 필요
 """
 import os
 import sys

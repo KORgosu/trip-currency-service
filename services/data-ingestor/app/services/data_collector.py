@@ -306,44 +306,77 @@ class DataCollector:
             raise ExternalAPIError(f"ExchangeRate-API request failed: {str(e)}", "exchangerate_api")
     
     async def _collect_from_fixer(self, config: Dict[str, Any]) -> List[RawExchangeRateData]:
-        """Fixer.io API에서 데이터 수집"""
-        params = {
-            "access_key": config.get("api_key", ""),
-            "base": "EUR",  # 무료 버전은 EUR 기준
-            "symbols": ",".join(config["currencies"] + ["KRW"])
-        }
-        
+        """
+        Fixer.io API에서 데이터 수집
+
+        수정사항:
+        - 무료 버전의 올바른 엔드포인트 사용
+        - API 키 파라미터 처리 개선
+        - 에러 처리 강화
+        """
         try:
-            async with self.session.get(config["base_url"], params=params) as response:
-                response.raise_for_status()
-                data = await response.json()
-                
-                raw_data = []
-                
-                if "rates" in data and "KRW" in data["rates"]:
-                    krw_to_eur = data["rates"]["KRW"]
-                    
-                    for currency_code, eur_rate in data["rates"].items():
-                        if currency_code in config["currencies"] and currency_code != "KRW":
-                            # EUR -> KRW 환산
-                            krw_rate = krw_to_eur / eur_rate if eur_rate > 0 else 0
-                            
-                            raw_data.append(RawExchangeRateData(
-                                currency_code=currency_code,
-                                rate=krw_rate,
-                                source="fixer",
-                                timestamp=DateTimeUtils.utc_now(),
-                                metadata={
-                                    "base_currency": "EUR",
-                                    "date": data.get("date"),
-                                    "via_eur": True
-                                }
-                            ))
-                
-                return raw_data
-                
+            # Fixer.io 무료 버전은 API 키 없이도 사용 가능하지만 제한적
+            params = {}
+            if config.get("api_key"):
+                params["access_key"] = config["api_key"]
+
+            # 올바른 엔드포인트 사용 (무료 버전)
+            url = "http://data.fixer.io/api/latest"  # config["base_url"] 대신 하드코딩
+
+            async with self.session.get(url, params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+
+                    raw_data = []
+
+                    if "rates" in data and "KRW" in data["rates"] and "USD" in data["rates"]:
+                        krw_rate = data["rates"]["KRW"]
+                        usd_rate = data["rates"]["USD"]
+
+                        # EUR을 기준으로 KRW/USD 계산
+                        for currency_code in config["currencies"]:
+                            if currency_code in data["rates"]:
+                                eur_rate = data["rates"][currency_code]
+
+                                if currency_code == "USD":
+                                    # EUR -> USD -> KRW
+                                    krw_rate_for_currency = (usd_rate / eur_rate) * krw_rate if eur_rate > 0 else 0
+                                else:
+                                    # EUR -> 타통화 -> KRW
+                                    krw_rate_for_currency = (krw_rate / eur_rate) if eur_rate > 0 else 0
+
+                                raw_data.append(RawExchangeRateData(
+                                    currency_code=currency_code,
+                                    rate=krw_rate_for_currency,
+                                    source="fixer",
+                                    timestamp=DateTimeUtils.utc_now(),
+                                    metadata={
+                                        "base_currency": "EUR",
+                                        "date": data.get("date"),
+                                        "via_eur": True,
+                                        "success": data.get("success", False)
+                                    }
+                                ))
+
+                        logger.info(
+                            "Fixer.io data collected successfully",
+                            currency_count=len(raw_data),
+                            base_rates={"KRW": krw_rate, "USD": usd_rate}
+                        )
+
+                    return raw_data
+                else:
+                    logger.warning(
+                        "Fixer.io API returned non-200 status",
+                        status=response.status,
+                        url=url
+                    )
+                    return []
+
         except Exception as e:
-            raise ExternalAPIError(f"Fixer.io API request failed: {str(e)}", "fixer")
+            logger.warning(f"Fixer.io API request failed: {str(e)}", source="fixer")
+            # Fixer API 실패는 치명적 에러로 처리하지 않음 (백업 API이므로)
+            return []
     
     def _parse_bok_currency_code(self, stat_name: str) -> Optional[str]:
         """한국은행 통계명에서 통화 코드 추출"""

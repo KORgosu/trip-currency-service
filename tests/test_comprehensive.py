@@ -124,7 +124,22 @@ class ComprehensiveTester:
     async def test_infrastructure_health(self) -> tuple[bool, str, Dict]:
         """인프라 헬스 체크"""
         health_status = {}
-        
+
+        # 데이터베이스 초기화 (필수)
+        try:
+            # PYTHONPATH 설정하여 import 경로 문제 해결
+            import sys
+            import os
+            sys.path.insert(0, os.path.abspath('.'))
+
+            from services.shared.database import init_database, get_db_manager
+            await init_database()
+            db_manager = get_db_manager()
+            print("   Database initialized successfully")
+        except Exception as e:
+            print(f"   Database initialization failed: {e}")
+            health_status["database_init"] = f"error: {e}"
+
         # MySQL 연결 테스트
         try:
             connection = await aiomysql.connect(**self.db_config)
@@ -135,7 +150,7 @@ class ComprehensiveTester:
             health_status["mysql"] = "healthy" if result and result[0] == 1 else "unhealthy"
         except Exception as e:
             health_status["mysql"] = f"error: {e}"
-        
+
         # Redis 연결 테스트
         try:
             redis_client = aioredis.from_url(self.redis_url, decode_responses=True)

@@ -28,20 +28,9 @@ def get_logger_safe():
 # 전역 로거 초기화 (지연 로딩)
 logger = get_logger_safe()
 
-<<<<<<< HEAD
 # Kafka import (실시간 서비스에서만 사용)
 KAFKA_AVAILABLE = False
 logger.info("Kafka disabled for local development, using SQS only")
-=======
-try:
-    from aiokafka import AIOKafkaProducer, AIOKafkaConsumer
-    from aiokafka.errors import KafkaError
-    KAFKA_AVAILABLE = True
-    logger.info("aiokafka successfully imported")
-except ImportError as e:
-    KAFKA_AVAILABLE = False
-    logger.warning(f"aiokafka not available, Kafka functionality disabled: {str(e)}")
->>>>>>> 3fcd9dbb2e44180001aa553bf50ef739944db6b0
 
 try:
     import boto3
@@ -90,7 +79,7 @@ class MessageProducer:
             logger.info("Message producer initialized successfully")
             
         except Exception as e:
-            logger.error(f"Failed to initialize message producer: {e}")
+            logger.error("Failed to initialize message producer", error=e)
             raise MessagingError("Producer initialization failed", system="kafka_sqs")
     
     async def _init_kafka_producer(self):
@@ -128,7 +117,7 @@ class MessageProducer:
                        servers=self.config.messaging.kafka_bootstrap_servers)
             
         except Exception as e:
-            logger.error(f"Failed to initialize Kafka producer: {e}")
+            logger.error("Failed to initialize Kafka producer", error=e)
             self.kafka_producer = None
     
     def _init_sqs_client(self):
@@ -144,7 +133,7 @@ class MessageProducer:
             logger.info("SQS client initialized", region=self.config.messaging.sqs_region)
             
         except Exception as e:
-            logger.error(f"Failed to initialize SQS client: {e}")
+            logger.error("Failed to initialize SQS client", error=e)
             self.sqs_client = None
     
     async def send_message(
@@ -196,7 +185,7 @@ class MessageProducer:
                 return True
                 
             except Exception as e:
-                logger.warning(f"Kafka send failed, trying SQS fallback: {e}")
+                logger.warning("Kafka send failed, trying SQS fallback", error=e)
         
         # SQS 폴백
         if self.sqs_client and self.config.messaging.sqs_queue_url:
@@ -224,7 +213,7 @@ class MessageProducer:
                 return True
                 
             except Exception as e:
-                logger.error(f"SQS send also failed: {e}")
+                logger.error("SQS send also failed", error=e)
         
         # 모든 전송 방법 실패
         logger.error("All messaging systems failed", topic=topic)
@@ -271,7 +260,7 @@ class MessageConsumer:
             logger.info("Message consumer initialized successfully")
             
         except Exception as e:
-            logger.error(f"Failed to initialize message consumer: {e}")
+            logger.error("Failed to initialize message consumer", error=e)
             raise MessagingError("Consumer initialization failed", system="kafka_sqs")
     
     async def _init_kafka_consumer(self):
@@ -292,7 +281,7 @@ class MessageConsumer:
                        topics=self.topics, group_id=self.group_id)
             
         except Exception as e:
-            logger.error(f"Failed to initialize Kafka consumer: {e}")
+            logger.error("Failed to initialize Kafka consumer", error=e)
             self.kafka_consumer = None
     
     def _init_sqs_client(self):
@@ -305,7 +294,7 @@ class MessageConsumer:
             logger.info("SQS client initialized for consumer")
             
         except Exception as e:
-            logger.error(f"Failed to initialize SQS client for consumer: {e}")
+            logger.error("Failed to initialize SQS client for consumer", error=e)
             self.sqs_client = None
     
     async def start_consuming(self, message_handler: Callable[[Dict[str, Any]], None]):
@@ -347,11 +336,14 @@ class MessageConsumer:
                     
                 except Exception as e:
                     logger.error(
-                        f"Message processing failed: {e}, topic={message.topic}, message_value={message.value}"
+                        "Message processing failed",
+                        error=e,
+                        topic=message.topic,
+                        message_value=message.value
                     )
                     
         except Exception as e:
-            logger.error(f"Kafka consumption error: {e}")
+            logger.error("Kafka consumption error", error=e)
             raise MessagingError("Kafka consumption failed", system="kafka")
     
     async def _consume_sqs(self, message_handler: Callable):
@@ -385,13 +377,13 @@ class MessageConsumer:
                                    message_id=message['MessageId'])
                         
                     except Exception as e:
-                        logger.error(f"SQS message processing failed: {e}")
+                        logger.error("SQS message processing failed", error=e)
                 
                 # 짧은 대기
                 await asyncio.sleep(1)
                 
         except Exception as e:
-            logger.error(f"SQS consumption error: {e}")
+            logger.error("SQS consumption error", error=e)
             raise MessagingError("SQS consumption failed", system="sqs")
     
     async def stop(self):

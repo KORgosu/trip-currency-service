@@ -2,6 +2,22 @@
 Currency Service - 실시간 환율 조회 서비스
 FastAPI 기반 웹 서버 (로컬 개발용)
 AWS Lambda 배포 시에는 lambda_handler 함수 사용
+
+주요 기능:
+- 최신 환율 정보 조회 (Redis 캐시 우선)
+- 물가 지수 계산 (빅맥/스타벅스 지수)
+- 캐시 미스 시 Aurora DB 폴백
+- 다중 통화 동시 조회 지원
+
+API 엔드포인트:
+- GET /health: 헬스 체크
+- GET /api/v1/currencies/latest: 최신 환율 조회
+- GET /api/v1/currencies/{currency_code}: 통화별 상세 정보
+- GET /api/v1/price-index: 물가 지수 조회
+
+배포 방식:
+- 로컬: FastAPI 서버 (main.py)
+- AWS: Lambda + API Gateway (lambda_handler)
 """
 import os
 import sys
