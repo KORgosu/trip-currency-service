@@ -165,51 +165,79 @@ class DataProcessor:
         return currency_names.get(currency_code, currency_code)
     
     async def _filter_duplicates(self, processed_data: List[ExchangeRate]) -> List[ExchangeRate]:
-        """중복 데이터 필터링"""
+        """
+        중복 데이터 필터링
+
+        개선된 로직:
+        - 최근 10분 내 동일 소스의 동일 통화 데이터만 중복으로 처리
+        - 환율 변동을 고려하여 0.1% 이내 차이는 동일 값으로 처리
+        - 타임스탬프가 최신인 데이터는 항상 저장
+        """
         if not processed_data:
             return []
-        
+
         try:
-            # 최근 1시간 내 동일 통화의 데이터가 있는지 확인
-            one_hour_ago = DateTimeUtils.utc_now() - timedelta(hours=1)
-            
+            # 최근 10분 내 데이터만 중복 체크 (환율 변동 고려)
+            ten_minutes_ago = DateTimeUtils.utc_now() - timedelta(minutes=10)
+
             filtered_data = []
-            
+
             for item in processed_data:
-                # 중복 체크 쿼리
+                # 중복 체크 쿼리 (개선됨)
                 query = """
-                    SELECT COUNT(*) as count
+                    SELECT COUNT(*) as count, MAX(recorded_at) as latest_timestamp
                     FROM exchange_rate_history
-                    WHERE currency_code = %s 
+                    WHERE currency_code = %s
                         AND source = %s
                         AND recorded_at > %s
-                        AND ABS(deal_base_rate - %s) < 0.01
+                        AND ABS((deal_base_rate - %s) / %s) < 0.001  -- 0.1% 이내 차이
                 """
-                
+
                 result = await self.mysql_helper.execute_query(
-                    query, 
-                    (item.currency_code, item.source, one_hour_ago, float(item.deal_base_rate))
+                    query,
+                    (item.currency_code, item.source, ten_minutes_ago,
+                     float(item.deal_base_rate), float(item.deal_base_rate))
                 )
-                
+
                 if result and result[0]['count'] == 0:
                     # 중복이 아닌 경우만 추가
                     filtered_data.append(item)
-                else:
                     logger.debug(
-                        "Duplicate data filtered",
+                        "New data accepted",
                         currency=item.currency_code,
                         source=item.source,
                         rate=float(item.deal_base_rate)
                     )
-            
-            logger.debug(
+                else:
+                    # 중복 데이터이지만 타임스탬프가 더 최신인 경우 업데이트
+                    latest_timestamp = result[0]['latest_timestamp'] if result else None
+                    if latest_timestamp and item.recorded_at > latest_timestamp:
+                        filtered_data.append(item)
+                        logger.debug(
+                            "Updated data accepted (newer timestamp)",
+                            currency=item.currency_code,
+                            source=item.source,
+                            old_timestamp=latest_timestamp.isoformat(),
+                            new_timestamp=item.recorded_at.isoformat()
+                        )
+                    else:
+                        logger.debug(
+                            "Duplicate data filtered",
+                            currency=item.currency_code,
+                            source=item.source,
+                            rate=float(item.deal_base_rate),
+                            existing_count=result[0]['count'] if result else 0
+                        )
+
+            logger.info(
                 "Duplicate filtering completed",
                 original_count=len(processed_data),
-                filtered_count=len(filtered_data)
+                filtered_count=len(filtered_data),
+                duplicates_filtered=len(processed_data) - len(filtered_data)
             )
-            
+
             return filtered_data
-            
+
         except Exception as e:
             logger.warning("Duplicate filtering failed, proceeding with all data", error=e)
             return processed_data

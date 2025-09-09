@@ -137,7 +137,7 @@ class ConfigManager:
                 aurora_host=os.getenv("DB_HOST", "localhost"),
                 aurora_port=int(os.getenv("DB_PORT", "3306")),
                 aurora_database=os.getenv("DB_NAME", "currency_db"),
-                aurora_username=os.getenv("DB_USER", "root"),
+                aurora_username=os.getenv("DB_USER", "currency_user"),  # Docker Compose와 일치
                 aurora_password=os.getenv("DB_PASSWORD", "password"),
                 
                 # 로컬 Redis (Docker Compose)

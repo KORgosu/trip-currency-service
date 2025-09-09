@@ -91,7 +91,7 @@ python test_integration.py
 - **History Service**: http://localhost:8003
   - Health Check: http://localhost:8003/health
   - API 문서: http://localhost:8003/docs
-- **Kafka UI**: http://localhost:8081
+- **Kafka UI**: http://localhost:8080
 - **LocalStack Dashboard**: http://localhost:4566
 
 ### 📊 주요 명령어
@@ -241,7 +241,7 @@ curl "http://localhost:8003/api/v1/history/compare?targets=USD,JPY,EUR&period=1m
   - 헬스체크: http://localhost:8003/health
 
 ### 🛠️ 개발 도구
-- **Kafka UI**: http://localhost:8081 (Kafka 클러스터 관리)
+- **Kafka UI**: http://localhost:8080 (Kafka 클러스터 관리)
 - **MySQL**: localhost:3306 (currency_user/password)
 - **Redis**: localhost:6379
 - **LocalStack**: http://localhost:4566 (AWS 서비스 에뮬레이션)
