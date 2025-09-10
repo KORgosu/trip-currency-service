@@ -85,12 +85,19 @@ class ApiService {
       }
       
       const data = await response.json();
-      
-      if (!data.success) {
-        throw new Error(data.error?.message || '랭킹 API 요청 실패');
+      // Accept multiple response shapes from the ranking service:
+      // - raw array: [ { country, count } ]
+      // - wrapped: { success: true, data: { ranking: [...] } }
+      // - legacy: { ranking: [...] } or { data: [...] }
+      if (Array.isArray(data)) return data;
+      if (data && typeof data === 'object') {
+        if (data.success === true) return data;
+        if (data.data) return data;
+        if (Array.isArray(data.ranking)) return data;
       }
-      
-      return data;
+
+      // fallback: error
+      throw new Error(data.error?.message || '랭킹 API 요청 실패');
     } catch (error) {
       console.error('랭킹 API 요청 실패:', error);
       
@@ -358,15 +365,73 @@ class ApiService {
   // 랭킹 서비스 API 메서드들
   
   // 랭킹 조회
-  async getRankings(period = 'daily', limit = 10, offset = 0) {
-    return this.rankingRequest(`/api/v1/rankings?period=${period}&limit=${limit}&offset=${offset}`);
+  async getRankings(period = 'daily', limit = 10, offset = 0, decay = 0.9) {
+    // map period to ranking service endpoints
+    // Normalize various response shapes from the ranking service:
+    // - raw array: [ { country, count } ]
+    // - wrapped: { success: true, data: { ranking: [...] } }
+    // - legacy object: { ranking: [...] }
+    const normalize = (resp) => {
+      if (!resp) return [];
+      if (Array.isArray(resp)) return resp;
+      if (resp.success && resp.data) {
+        if (Array.isArray(resp.data)) return resp.data;
+        if (Array.isArray(resp.data.ranking)) return resp.data.ranking;
+      }
+      if (Array.isArray(resp.ranking)) return resp.ranking;
+      if (Array.isArray(resp.data)) return resp.data;
+      return [];
+    };
+
+    try {
+      if (period === 'trending') {
+        const resp = await this.rankingRequest(`/ranks/trending?limit=${limit}&decay=${decay}`);
+        const items = normalize(resp);
+        return {
+          success: true,
+          data: {
+            period: 'trending',
+            last_updated: new Date().toISOString(),
+            ranking: items.map((it, idx) => ({
+              country_code: it.country || it.country_code,
+              country_name: it.country_name || it.country || it.country_code,
+              selection_count: Math.round((it.score || it.selection_count || it.count || 0) * 10) / 10,
+              rank: idx + 1
+            }))
+          }
+        };
+      }
+
+      // default: daily/today
+      const resp = await this.rankingRequest(`/ranks/today?limit=${limit}`);
+      const items = normalize(resp);
+      return {
+        success: true,
+        data: {
+          period: 'daily',
+          last_updated: new Date().toISOString(),
+          ranking: items.map((it, idx) => ({
+            country_code: it.country || it.country_code,
+            country_name: it.country_name || it.country || it.country_code,
+            selection_count: it.count || it.selection_count || 0,
+            rank: idx + 1
+          }))
+        }
+      };
+    } catch (err) {
+      // bubble up to rankingRequest which will return mock data if service is down
+      throw err;
+    }
   }
 
   // 사용자 선택 기록
   async recordSelection(selectionData) {
-    return this.rankingRequest('/api/v1/rankings/selections', {
+    // send a click event to the ranking service
+    // backend expects { country }
+    const payload = { country: selectionData.country_code || selectionData.country || selectionData.country_code };
+    return this.rankingRequest('/click', {
       method: 'POST',
-      body: JSON.stringify(selectionData)
+      body: JSON.stringify(payload)
     });
   }
 

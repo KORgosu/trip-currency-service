@@ -37,6 +37,12 @@ const useRankingData = () => {
 
       const response = await apiService.recordSelection(selectionData);
       console.log('사용자 선택 기록 완료:', response);
+      // refresh rankings after a click
+      try {
+        await fetchRankings('daily', 10, 0);
+      } catch (e) {
+        // ignore refresh errors
+      }
       return response;
     } catch (err) {
       console.error('사용자 선택 기록 실패:', err);

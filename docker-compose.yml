@@ -1,0 +1,117 @@
+version: "3.8"
+
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: "password"
+      MYSQL_DATABASE: "currency_db"
+      MYSQL_USER: "currency_user"
+      MYSQL_PASSWORD: "password"
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-ppassword"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  currency-service:
+    build:
+      context: .
+      dockerfile: services/currency-service/Dockerfile
+    ports:
+      - "8001:8000" # host:container (Dockerfile exposes 8000)
+    environment:
+      ENVIRONMENT: "local"
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_NAME: "currency_db"
+      DB_USER: "currency_user"
+      DB_PASSWORD: "password"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    depends_on:
+      - mysql
+      - redis
+    restart: unless-stopped
+
+  ranking-service:
+    build:
+      context: .
+      dockerfile: services/ranking-service/Dockerfile
+    ports:
+      - "8002:8000"
+    environment:
+      ENVIRONMENT: "local"
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_NAME: "currency_db"
+      DB_USER: "currency_user"
+      DB_PASSWORD: "password"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    depends_on:
+      - mysql
+      - redis
+    restart: unless-stopped
+
+  history-service:
+    build:
+      context: .
+      dockerfile: services/history-service/Dockerfile
+    ports:
+      - "8003:8000"
+    environment:
+      ENVIRONMENT: "local"
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_NAME: "currency_db"
+      DB_USER: "currency_user"
+      DB_PASSWORD: "password"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    depends_on:
+      - mysql
+      - redis
+    restart: unless-stopped
+
+  data-ingestor:
+    build:
+      context: .
+      dockerfile: services/data-ingestor/Dockerfile
+    environment:
+      ENVIRONMENT: "local"
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_NAME: "currency_db"
+      DB_USER: "currency_user"
+      DB_PASSWORD: "password"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    depends_on:
+      - mysql
+      - redis
+    restart: "no"
+
+volumes:
+  mysql_data:
+  redis_data:
+
+networks:
+  default:
+    name: currency_project_network

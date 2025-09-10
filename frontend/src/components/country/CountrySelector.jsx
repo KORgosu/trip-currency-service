@@ -58,6 +58,12 @@ const SearchButton = styled.button`
   &:hover {
     background-color: #5a6fd8;
   }
+
+  &:disabled {
+    background-color: #bfc8ff;
+    cursor: not-allowed;
+    opacity: 0.8;
+  }
   
   @media (max-width: 480px) {
     width: 45px;
@@ -160,6 +166,7 @@ const CountrySelector = () => {
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
   const [clickedItem, setClickedItem] = useState(null);
+  const [isRecording, setIsRecording] = useState(false);
   const inputRef = useRef(null);
   const listRef = useRef(null);
   const navigate = useNavigate();
@@ -287,12 +294,28 @@ const CountrySelector = () => {
   };
 
   // 검색 실행 함수
-  const handleSearch = () => {
+  const handleSearch = async () => {
     if (selectedCountries.length === 0) {
       alert('비교할 국가를 최소 1개 이상 선택해주세요.');
       return;
     }
-    
+
+    // 선택된 국가들에 대해 클릭 이벤트(카운트)를 기록
+    setIsRecording(true);
+    const sessionId = `session_${Date.now()}`;
+    try {
+      await Promise.all(
+        selectedCountries.map((code) =>
+          recordUserSelection(code, 'anonymous', sessionId)
+        )
+      );
+    } catch (err) {
+      // 기록 실패는 네비게이션을 막지 않음; 로그만 남김
+      console.error('선택 국가 클릭 기록 중 오류:', err);
+    } finally {
+      setIsRecording(false);
+    }
+
     // 선택된 국가들을 URL 파라미터로 전달
     const countriesParam = selectedCountries.join(',');
     navigate(`/comparison?countries=${countriesParam}`);
@@ -397,8 +420,8 @@ const CountrySelector = () => {
           )}
         </DropdownContainer>
         
-        <SearchButton onClick={handleSearch} title="선택된 국가들 비교하기">
-          🔍
+        <SearchButton onClick={handleSearch} title="선택된 국가들 비교하기" disabled={isRecording}>
+          {isRecording ? '⏳' : '🔍'}
         </SearchButton>
       </SearchContainer>
 
