@@ -81,20 +81,26 @@ class StructuredLogger:
     """구조화된 로거 클래스"""
     
     def __init__(self, name: str):
+        self.name = name
         self.logger = logging.getLogger(name)
-        self._setup_logger()
-    
+        self._configured = False  # 설정 완료 여부를 확인할 플래그
+
     def _setup_logger(self):
-        """로거 설정"""
+        """실제 로깅이 필요한 시점에 단 한 번만 실행되는 설정 함수"""
+        if self._configured:
+            return
+
+        # 이제는 init_config()가 실행된 이후이므로 안전하게 get_config() 호출 가능
+        from shared.config import get_config, Environment
         config = get_config()
         
         # 로그 레벨 설정
         level = getattr(logging, config.log_level.upper(), logging.INFO)
         self.logger.setLevel(level)
         
-        # 기존 핸들러 제거
-        for handler in self.logger.handlers[:]:
-            self.logger.removeHandler(handler)
+        # 기존 핸들러 제거 (중복 방지)
+        if self.logger.hasHandlers():
+            self.logger.handlers.clear()
         
         # 핸들러 생성
         handler = logging.StreamHandler(sys.stdout)
@@ -110,7 +116,14 @@ class StructuredLogger:
         
         # 중복 로그 방지
         self.logger.propagate = False
-    
+        
+        self._configured = True # 설정 완료 플래그를 True로 변경
+
+    def _log(self, level: int, message: str, **kwargs):
+        """내부 로그 메서드"""
+        self._setup_logger()  # <-- 핵심! 로그를 찍기 직전에 설정을 확인하고 적용
+        self.logger.log(level, message, extra=kwargs)
+
     def debug(self, message: str, **kwargs):
         """디버그 로그"""
         self._log(logging.DEBUG, message, **kwargs)
@@ -125,25 +138,23 @@ class StructuredLogger:
     
     def error(self, message: str, error: Exception = None, **kwargs):
         """에러 로그"""
+        self._setup_logger() # <-- 에러 로그도 마찬가지로 setup을 먼저 확인
         if error:
             kwargs['error_type'] = type(error).__name__
             kwargs['error_message'] = str(error)
-            self.logger.error(message, exc_info=error, extra=kwargs)
+            self.logger.error(message, exc_info=True, extra=kwargs)
         else:
             self._log(logging.ERROR, message, **kwargs)
     
     def critical(self, message: str, error: Exception = None, **kwargs):
         """치명적 에러 로그"""
+        self._setup_logger() # <-- 치명적 에러 로그도 마찬가지
         if error:
             kwargs['error_type'] = type(error).__name__
             kwargs['error_message'] = str(error)
-            self.logger.critical(message, exc_info=error, extra=kwargs)
+            self.logger.critical(message, exc_info=True, extra=kwargs)
         else:
             self._log(logging.CRITICAL, message, **kwargs)
-    
-    def _log(self, level: int, message: str, **kwargs):
-        """내부 로그 메서드"""
-        self.logger.log(level, message, extra=kwargs)
 
 
 # 로거 팩토리
