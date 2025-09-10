@@ -28,20 +28,9 @@ def get_logger_safe():
 # 전역 로거 초기화 (지연 로딩)
 logger = get_logger_safe()
 
-<<<<<<< HEAD
-try:
-    from aiokafka import AIOKafkaProducer, AIOKafkaConsumer
-    from aiokafka.errors import KafkaError
-    KAFKA_AVAILABLE = True
-    logger.info("aiokafka successfully imported")
-except ImportError as e:
-    KAFKA_AVAILABLE = False
-    logger.warning("aiokafka not available, Kafka functionality disabled", error=str(e))
-=======
 # Kafka import (실시간 서비스에서만 사용)
 KAFKA_AVAILABLE = False
 logger.info("Kafka disabled for local development, using SQS only")
->>>>>>> b7e0365 (error fix with ranking and history service)
 
 try:
     import boto3
