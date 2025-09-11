@@ -33,6 +33,7 @@ from shared.utils import SecurityUtils, ValidationUtils
 
 from app.services.selection_recorder import SelectionRecorder
 from app.services.ranking_provider import RankingProvider
+from shared.database import RedisHelper
 
 # 로거 초기화
 logger = logging.getLogger(__name__)
@@ -93,16 +94,9 @@ app = FastAPI(
 # CORS 설정
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",  # Vite 개발 서버 (기본 포트)
-        "http://localhost:5174",  # Vite 개발 서버 (실제 실행 포트)
-        "http://localhost:3000",  # React 개발 서버
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:5174",
-        "http://127.0.0.1:3000"
-    ],
+    allow_origins=["*"],  # 개발 환경에서는 모든 origin 허용
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
@@ -309,6 +303,33 @@ async def get_rankings(
         raise HTTPException(status_code=500, detail="Failed to retrieve rankings")
 
 
+@app.get("/api/v1/rankings/debug/counters")
+async def debug_counters():
+    """디버그용: Redis count:total:* / 오늘 일별 키 값 조회"""
+    try:
+        r = RedisHelper()
+        total_keys = await r.client.keys("count:total:*")
+        today = time.strftime('%Y-%m-%d')
+        daily_keys = await r.client.keys(f"count:{today}:*")
+        result = {}
+        for k in total_keys:
+            try:
+                v = await r.client.get(k)
+                result[k] = int(v) if v else 0
+            except:
+                result[k] = None
+        for k in daily_keys:
+            try:
+                v = await r.client.get(k)
+                result[k] = int(v) if v else 0
+            except:
+                result[k] = None
+        return {"success": True, "data": result}
+    except Exception as e:
+        logger.error(f"Debug counters failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
 @app.get("/api/v1/rankings/stats/{country_code}", response_model=SuccessResponse)
 async def get_country_stats(
     country_code: str,
@@ -396,7 +417,9 @@ def lambda_handler(event, context):
 if __name__ == "__main__":
     # 환경 변수에서 설정 로드
     host = os.getenv("HOST", "0.0.0.0")
-    port = int(os.getenv("PORT", "8002"))  # Ranking Service는 8002 포트
+    # NOTE: 컨테이너 내부에서는 8000으로 리스닝하고 docker-compose가 host 8002 -> container 8000 매핑
+    # 기존 기본값 8002 때문에 컨테이너가 8002에서 뜨고 호스트 8002->컨테이너 8000 포워딩이 실패하여 접근 불가 현상 발생
+    port = int(os.getenv("PORT", "8000"))
     
     logger.info(f"Starting Ranking Service on {host}:{port}")
     

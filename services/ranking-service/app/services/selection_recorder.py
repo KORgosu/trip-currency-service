@@ -68,8 +68,12 @@ class SelectionRecorder:
             ip_hash = self._hash_sensitive_data(client_ip)
             user_agent_hash = self._hash_sensitive_data(user_agent)
             
-            # 국가명 조회
-            country_name = await self._get_country_name(selection.country_code)
+            # 국가명 조회 (실패해도 계속)
+            try:
+                country_name = await self._get_country_name(selection.country_code)
+            except Exception as e:
+                logger.warning(f"Failed to get country name: {e}")
+                country_name = selection.country_code
             
             # 선택 기록 생성
             selection_record = SelectionRecord(
@@ -86,20 +90,19 @@ class SelectionRecorder:
                 ttl=int((timestamp + timedelta(days=365)).timestamp())  # 1년 후 만료
             )
             
-            # DynamoDB에 저장 시도
-            if self.dynamodb_helper:
-                try:
+            # 실시간 통계만 업데이트 (로컬 개발 환경)
+            await self._update_realtime_stats(selection.country_code, selection.session_id)
+            
+            # 선택적으로 저장 (로컬 개발에서는 건너뛰기)
+            try:
+                if self.dynamodb_helper:
                     await self._save_to_dynamodb(selection_record)
                     logger.info("Selection recorded to DynamoDB", selection_id=selection_id)
-                except Exception as e:
-                    logger.warning(f"DynamoDB save failed, using Redis fallback: {e}")
+                else:
                     await self._save_to_redis_fallback(selection_record)
-            else:
-                # DynamoDB 사용 불가 시 Redis에 저장
-                await self._save_to_redis_fallback(selection_record)
-            
-            # 실시간 통계 업데이트
-            await self._update_realtime_stats(selection.country_code)
+            except Exception as e:
+                logger.warning(f"Failed to save selection record: {e}")
+                # 로컬 개발에서는 무시
             
             return selection_id
             
@@ -159,30 +162,55 @@ class SelectionRecorder:
             logger.error(f"Failed to save to Redis fallback: {e}")
             # Redis 저장도 실패하면 로그만 남기고 계속 진행
     
-    async def _update_realtime_stats(self, country_code: str):
+    async def _update_realtime_stats(self, country_code: str, session_id: str = None):
         """실시간 통계 업데이트"""
         try:
+            # 간단한 단기 디듀플 (동일 국가에 대해 매우 짧은 간격 중복 호출 방지)
+            # 500ms 이내 동일 country_code 호출 시 두번째 호출은 무시
+            try:
+                dedupe_base = f"dedupe:sel:{country_code}"
+                if session_id:
+                    dedupe_base += f":{session_id}"
+                dedupe_key = dedupe_base
+                # setnx with 1s ttl
+                was_set = await self.redis_helper.client.set(dedupe_key, 1, ex=1, nx=True)
+                if not was_set:
+                    logger.info(f"Deduplicated rapid duplicate selection for {country_code}")
+                    return
+            except Exception as e:
+                logger.debug(f"Deduplication check failed: {e}")
+            # 1. 전체 카운터 증가
+            total_key = f"count:total:{country_code}"
+            current_total = await self.redis_helper.client.incr(total_key)
+            logger.info(f"Incremented total count for {country_code}: {current_total}")
+
+            # 2. 일별 카운터 증가
             today = datetime.utcnow().strftime('%Y-%m-%d')
+            today_key = f"count:{today}:{country_code}"
+            current_daily = await self.redis_helper.client.incr(today_key)
+            await self.redis_helper.client.expire(today_key, 86400 * 7)  # 7일간 보관
+            logger.info(f"Incremented daily count for {country_code}: {current_daily}")
+
+            # 3. 랭킹 캐시 무효화
+            pattern = 'ranking:*'
+            try:
+                keys = await self.redis_helper.client.keys(pattern)
+                if keys:
+                    logger.info(f"Invalidating {len(keys)} ranking cache keys")
+                    await self.redis_helper.client.delete(*keys)
+            except Exception as e:
+                logger.warning(f"Failed to invalidate ranking cache: {e}")
             
-            # 일일 카운터 증가
-            daily_key = f"daily_count:{today}:{country_code}"
-            await self.redis_helper.client.incr(daily_key)
-            await self.redis_helper.client.expire(daily_key, 86400 * 7)  # 7일 보관
-            
-            # 전체 일일 카운터
-            total_daily_key = f"daily_total:{today}"
-            await self.redis_helper.client.incr(total_daily_key)
-            await self.redis_helper.client.expire(total_daily_key, 86400 * 7)
-            
-            # 시간별 카운터 (실시간 모니터링용)
-            hour = datetime.utcnow().strftime('%Y-%m-%d-%H')
-            hourly_key = f"hourly_count:{hour}:{country_code}"
-            await self.redis_helper.client.incr(hourly_key)
-            await self.redis_helper.client.expire(hourly_key, 86400)  # 24시간 보관
-            
+            # 4. 결과 확인을 위한 로깅
+            try:
+                final_count = await self.redis_helper.client.get(total_key)
+                logger.info(f"Final count for {country_code}: {final_count}")
+            except Exception as e:
+                logger.warning(f"Failed to get final count: {e}")
+
         except Exception as e:
-            logger.warning(f"Failed to update realtime stats: {e}")
-            # 통계 업데이트 실패는 치명적이지 않음
+            logger.error(f"Failed to update stats for {country_code}: {e}")
+            raise
     
     async def _get_country_name(self, country_code: str) -> str:
         """국가 코드에서 국가명 조회"""

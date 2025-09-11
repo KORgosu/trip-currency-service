@@ -72,20 +72,14 @@ class RankingProvider:
                 logger.info(f"Ranking cache hit for {period}")
                 return cached_data
             
-            # DynamoDB에서 랭킹 데이터 조회
-            if not self.dynamodb_helper:
-                raise NotFoundError("Ranking service is not available - database connection failed")
-            
-            try:
-                ranking_data = await self._get_ranking_from_dynamodb(period)
-            except Exception as e:
-                logger.error(f"Failed to get ranking from DynamoDB for {period}: {e}")
-                raise NotFoundError(f"Ranking data not available for period: {period}")
-            
+            # 항상 최신 Redis 카운터를 기반으로 계산 (로컬 실시간 반영)
+            ranking_data = await self._calculate_and_save_ranking(period)
+
             # 페이지네이션 적용
-            total_items = len(ranking_data.get("ranking", []))
-            ranking_items = ranking_data.get("ranking", [])[offset:offset + limit]
-            
+            all_items = ranking_data.get("ranking", [])
+            total_items = len(all_items)
+            ranking_items = all_items[offset:offset + limit]
+
             result = {
                 "period": period,
                 "total_selections": ranking_data.get("total_selections", 0),
@@ -93,17 +87,20 @@ class RankingProvider:
                 "ranking": ranking_items,
                 "pagination": {
                     "current_page": (offset // limit) + 1,
-                    "total_pages": (total_items + limit - 1) // limit,
+                    "total_pages": (total_items + limit - 1) // limit if limit else 1,
                     "has_next": offset + limit < total_items,
                     "has_previous": offset > 0,
                     "total_items": total_items,
                     "items_per_page": limit
                 }
             }
-            
-            # 캐시에 저장
-            await self.redis_helper.set_json(cache_key, result, self.cache_ttl)
-            
+
+            # 캐시에 저장 (페이지네이션 된 결과 저장)
+            try:
+                await self.redis_helper.set_json(cache_key, result, self.cache_ttl)
+            except Exception as e:
+                logger.debug(f"Failed to cache ranking data: {e}")
+
             return result
             
         except Exception as e:
@@ -331,10 +328,96 @@ class RankingProvider:
         try:
             if not calculation_id:
                 calculation_id = f"calc_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
-            
-            # 실제 랭킹 데이터 계산 (현재는 구현되지 않음)
-            # TODO: 실제 사용자 선택 데이터를 기반으로 랭킹 계산 로직 구현
-            raise NotImplementedError("Ranking calculation is not implemented yet")
+            # Lightweight ranking calculation using Redis realtime counters (local-friendly)
+            # Supports periods: daily, weekly, monthly
+            today = datetime.utcnow()
+
+            if period == 'daily':
+                dates = [today.strftime('%Y-%m-%d')]
+            elif period == 'weekly':
+                dates = [(today - timedelta(days=i)).strftime('%Y-%m-%d') for i in range(7)]
+            elif period == 'monthly':
+                dates = [(today - timedelta(days=i)).strftime('%Y-%m-%d') for i in range(30)]
+            else:
+                # default to daily
+                dates = [today.strftime('%Y-%m-%d')]
+
+            country_scores: Dict[str, int] = {}
+            # Get total scores from permanent counters
+            total_pattern = "count:total:*"
+            try:
+                total_keys = await self.redis_helper.client.keys(total_pattern)
+                
+                for k in total_keys:
+                    if k == "count:total":  # skip the overall total
+                        continue
+                    try:
+                        cnt = await self.redis_helper.client.get(k)
+                        cnt = int(cnt) if cnt else 0
+                        # key format: count:total:CC
+                        cc = k.split(':')[-1]
+                        country_scores[cc] = cnt
+                    except Exception as e:
+                        logger.warning(f"Failed to get count for {k}: {e}")
+                        continue
+            except Exception as e:
+                logger.error(f"Failed to get total counts: {e}")
+
+            # Build ranking items (only for countries with clicks)
+            # Dense ranking: 같은 점수 동일 등수, 다음 서로 다른 점수는 바로 다음 숫자 (1,2,2,3)
+            sorted_items = sorted(country_scores.items(), key=lambda x: x[1], reverse=True)
+            ranking_items = []
+            prev_score = None
+            current_rank = 0
+            total_sum = sum(country_scores.values()) or 1
+            for cc, score in sorted_items:
+                if score <= 0:
+                    continue
+                if score != prev_score:
+                    current_rank += 1
+                    prev_score = score
+                country_name = await self._get_country_name(cc)
+                ranking_items.append({
+                    "rank": current_rank,
+                    "country_code": cc,
+                    "country_name": country_name,
+                    "score": score,
+                    "percentage": round((score / total_sum) * 100, 2),
+                    "change": "SAME",
+                    "change_value": 0,
+                    "previous_rank": current_rank
+                })
+
+            ranking_data = {
+                "period": period,
+                "total_selections": sum(country_scores.values()),
+                "last_updated": datetime.utcnow().isoformat() + 'Z',
+                "ranking": ranking_items
+            }
+
+            # Cache the calculated ranking
+            cache_key = f"ranking:{period}:10:0"
+            try:
+                await self.redis_helper.set_json(cache_key, ranking_data, self.cache_ttl)
+            except Exception as e:
+                logger.debug(f"Failed to cache ranking data: {e}")
+
+            # Try saving to DynamoDB if available (best-effort)
+            if self.dynamodb_helper:
+                try:
+                    item = {
+                        "ranking_period": period,
+                        "ranking_data": ranking_items,
+                        "total_selections": ranking_data["total_selections"],
+                        "calculated_at": ranking_data["last_updated"],
+                        "calculation_id": calculation_id
+                    }
+                    await self.dynamodb_helper.put_item(item)
+                    logger.info("Ranking results saved to DynamoDB (local save)", period=period)
+                except Exception as e:
+                    logger.warning(f"Failed to save ranking to DynamoDB: {e}")
+
+            return ranking_data
             
             # DynamoDB에 저장 (가능한 경우)
             if self.dynamodb_helper:

@@ -83,7 +83,7 @@ const RankingList = ({ rankings, loading, error, onRefresh }) => {
     return (
       <RankingContainer>
         <LoadingContainer>
-          <div>📊 랭킹 데이터가 없습니다.</div>
+          <div>📊 아직 클릭된 국가가 없습니다.</div>
           {onRefresh && (
             <RefreshButton onClick={onRefresh}>
               🔄 새로고침
@@ -94,18 +94,19 @@ const RankingList = ({ rankings, loading, error, onRefresh }) => {
     );
   }
 
+  // 클릭 수를 기준으로 정렬
+  const sortedRankings = [...rankings.ranking].sort((a, b) => b.selection_count - a.selection_count);
+
   return (
     <RankingContainer>
-      {rankings.ranking.map((ranking, index) => (
+      {sortedRankings.map((ranking) => (
         <RankingItem
           key={ranking.country_code}
           ranking={{
             countryCode: ranking.country_code,
-            score: ranking.selection_count,
-            trend: 'up', // 실제 데이터에서는 trend 정보가 없으므로 기본값
-            change: 0    // 실제 데이터에서는 change 정보가 없으므로 기본값
+            selection_count: ranking.selection_count,
           }}
-          position={ranking.rank || index + 1}
+          position={ranking.rank || ranking.position || ranking._rank || ranking.temp_rank || 0}
           countryName={ranking.country_name}
         />
       ))}

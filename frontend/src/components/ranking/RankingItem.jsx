@@ -86,16 +86,7 @@ const Score = styled.div`
 `;
 
 const RankingItem = ({ ranking, position, countryName }) => {
-  const getTrendIcon = (trend) => {
-    switch (trend) {
-      case 'up':
-        return '▲';
-      case 'down':
-        return '▼';
-      default:
-        return '—';
-    }
-  };
+  const getTrendIcon = () => '—';  // 트렌드 아이콘은 일단 중립으로 고정
 
   const getTrendClass = (trend) => {
     switch (trend) {
@@ -164,18 +155,13 @@ const RankingItem = ({ ranking, position, countryName }) => {
     <ItemContainer>
       <RankNumber>{position}</RankNumber>
       
-      <TrendIndicator className={getTrendClass(ranking.trend)}>
-        <span>{getTrendIcon(ranking.trend)}</span>
-        <span>{ranking.change || 0}</span>
-      </TrendIndicator>
-      
       <CountryInfo>
         <CountryFlag>{info.flag}</CountryFlag>
         <CountryName>{info.name}</CountryName>
       </CountryInfo>
       
       <ScoreContainer>
-        <Score>{ranking.score}회 클릭</Score>
+        <Score>{ranking.selection_count}회 클릭</Score>
       </ScoreContainer>
     </ItemContainer>
   );

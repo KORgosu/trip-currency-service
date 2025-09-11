@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useCallback } from 'react';
 import styled from 'styled-components';
 import RankingList from '../components/ranking/RankingList';
+import useRankingData from '../hooks/useRankingData';
 
 const RankingContainer = styled.div`
   max-width: 1200px;
@@ -29,13 +30,24 @@ const SectionTitle = styled.h2`
 `;
 
 const RankingPage = () => {
+  // 홈과 동일한 랭킹 훅 사용 (기존 페이지는 훅 미연결로 항상 0표처럼 보임)
+  const { rankings, loading, error, fetchRankings } = useRankingData();
+
+  const handleRefresh = useCallback(() => {
+    fetchRankings('daily', 10, 0).catch(()=>{});
+  }, [fetchRankings]);
+
   return (
     <RankingContainer>
       <PageTitle>여행지 인기 랭킹</PageTitle>
-      
       <RankingSection>
         <SectionTitle>현재 인기 Top 여행지</SectionTitle>
-        <RankingList />
+        <RankingList 
+          rankings={rankings}
+          loading={loading}
+          error={error}
+          onRefresh={handleRefresh}
+        />
       </RankingSection>
     </RankingContainer>
   );

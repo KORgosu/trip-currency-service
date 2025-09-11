@@ -1,6 +1,21 @@
 version: "3.8"
 
 services:
+  localstack:
+    image: localstack/localstack:2.3
+    environment:
+      - SERVICES=dynamodb,s3,sqs,sns
+      - DEFAULT_REGION=ap-northeast-2
+      - DEBUG=0
+    ports:
+      - "4566:4566"
+    volumes:
+      - localstack_data:/var/lib/localstack
+    healthcheck:
+      test: ["CMD", "bash", "-c", "awslocal dynamodb list-tables >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
   mysql:
     image: mysql:8.0
     environment:
@@ -65,9 +80,11 @@ services:
       DB_PASSWORD: "password"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      LOCALSTACK_HOST: localstack
     depends_on:
       - mysql
       - redis
+      - localstack
     restart: unless-stopped
 
   history-service:
@@ -85,9 +102,11 @@ services:
       DB_PASSWORD: "password"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      LOCALSTACK_HOST: localstack
     depends_on:
       - mysql
       - redis
+      - localstack
     restart: unless-stopped
 
   data-ingestor:
@@ -111,6 +130,7 @@ services:
 volumes:
   mysql_data:
   redis_data:
+  localstack_data:
 
 networks:
   default:

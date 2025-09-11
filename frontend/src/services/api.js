@@ -384,38 +384,41 @@ class ApiService {
     };
 
     try {
-      if (period === 'trending') {
-        const resp = await this.rankingRequest(`/ranks/trending?limit=${limit}&decay=${decay}`);
-        const items = normalize(resp);
-        return {
-          success: true,
-          data: {
-            period: 'trending',
-            last_updated: new Date().toISOString(),
-            ranking: items.map((it, idx) => ({
-              country_code: it.country || it.country_code,
-              country_name: it.country_name || it.country || it.country_code,
-              selection_count: Math.round((it.score || it.selection_count || it.count || 0) * 10) / 10,
-              rank: idx + 1
-            }))
-          }
-        };
+      // Get rankings from our FastAPI backend
+  const nocache = Date.now();
+  const resp = await this.rankingRequest(`/api/v1/rankings?period=${period}&limit=${limit}&offset=${offset}&_=${nocache}`);
+      const data = resp.data || resp;
+      const items = data.ranking || [];
+      // 1) 기본 정규화 (서버 rank 보존)
+      let rankingItems = items
+        .filter(it => (it.score || it.selection_count || 0) > 0)
+        .map(it => ({
+          country_code: it.country_code,
+            country_name: it.country_name,
+            selection_count: it.score ?? it.selection_count ?? 0,
+            rank: it.rank // 서버에서 온 rank (dense)
+        }));
+
+      // 2) 점수 순으로 정렬 (표시 일관성)
+      rankingItems.sort((a,b)=> b.selection_count - a.selection_count);
+
+      // 3) 서버가 rank 안준 경우에만 dense fallback 계산
+      const missingRank = rankingItems.some(r => r.rank == null);
+      if (missingRank) {
+        let prevScore = null; let currentRank = 0;
+        rankingItems.forEach(row => {
+          if (row.selection_count !== prevScore) { currentRank += 1; prevScore = row.selection_count; }
+          row.rank = currentRank;
+        });
       }
 
-      // default: daily/today
-      const resp = await this.rankingRequest(`/ranks/today?limit=${limit}`);
-      const items = normalize(resp);
       return {
         success: true,
         data: {
-          period: 'daily',
-          last_updated: new Date().toISOString(),
-          ranking: items.map((it, idx) => ({
-            country_code: it.country || it.country_code,
-            country_name: it.country_name || it.country || it.country_code,
-            selection_count: it.count || it.selection_count || 0,
-            rank: idx + 1
-          }))
+          period: data.period || period || 'daily',
+          total_selections: data.total_selections || 0,
+          last_updated: data.last_updated || new Date().toISOString(),
+          ranking: rankingItems
         }
       };
     } catch (err) {
@@ -427,12 +430,39 @@ class ApiService {
   // 사용자 선택 기록
   async recordSelection(selectionData) {
     // send a click event to the ranking service
-    // backend expects { country }
-    const payload = { country: selectionData.country_code || selectionData.country || selectionData.country_code };
-    return this.rankingRequest('/click', {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    });
+    // backend expects { user_id, country_code, session_id, referrer }
+    const payload = {
+      user_id: selectionData.user_id || 'anonymous',
+      country_code: selectionData.country_code || selectionData.country,
+      session_id: selectionData.session_id,
+      referrer: selectionData.referrer
+    };
+
+    try {
+      const response = await fetch(`${this.rankingBaseURL}/api/v1/rankings/selections`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Correlation-ID': this.generateCorrelationId(),
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      if (!data.success) {
+        throw new Error(data.error?.message || '선택 기록 실패');
+      }
+
+      return data;
+    } catch (error) {
+      console.error('선택 기록 실패:', error);
+      // 에러를 상위로 전파하여 처리
+      throw error;
+    }
   }
 
   // 국가별 통계 조회

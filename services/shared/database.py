@@ -35,6 +35,100 @@ def get_logger_safe():
 logger = get_logger_safe()
 
 
+class InMemoryRedisClient:
+    """A tiny async in-memory Redis-like client for local development fallback."""
+    def __init__(self):
+        from datetime import datetime
+        self.store = {}
+        self.hash_store = {}
+        self.expirations = {}  # key -> expiry timestamp (float)
+
+    async def ping(self):
+        return True
+
+    async def set(self, key, value, ex=None):
+        self._purge_expired()
+        self.store[key] = value
+        if ex:
+            import time
+            self.expirations[key] = time.time() + int(ex)
+
+    async def get(self, key):
+        self._purge_expired()
+        return self.store.get(key)
+
+    async def incr(self, key):
+        self._purge_expired()
+        val = int(self.store.get(key, 0) or 0) + 1
+        self.store[key] = str(val)
+        return val
+
+    async def expire(self, key, seconds):
+        import time
+        if key in self.store:
+            self.expirations[key] = time.time() + int(seconds)
+            return True
+        return False
+
+    async def keys(self, pattern):
+        # very naive pattern support: '*' at end
+        self._purge_expired()
+        if pattern.endswith('*'):
+            prefix = pattern[:-1]
+            return [k for k in list(self.store.keys()) + list(self.hash_store.keys()) if k.startswith(prefix)]
+        # exact match
+        return [k for k in list(self.store.keys()) + list(self.hash_store.keys()) if k == pattern]
+
+    async def delete(self, *keys):
+        """Delete keys and return count of removed keys"""
+        removed = 0
+        for k in keys:
+            if k in self.store:
+                del self.store[k]
+                removed += 1
+            if k in self.hash_store:
+                del self.hash_store[k]
+                removed += 1
+            if k in self.expirations:
+                del self.expirations[k]
+        return removed
+
+    async def close(self):
+        """Cleanup any resources (nothing to do for in-memory implementation)"""
+        self.store.clear()
+        self.hash_store.clear()
+        self.expirations.clear()
+
+    async def hset(self, key, mapping=None):
+        self._purge_expired()
+        if mapping is None:
+            return 0
+        if key not in self.hash_store:
+            self.hash_store[key] = {}
+        for k, v in mapping.items():
+            self.hash_store[key][k] = str(v)
+        return len(mapping)
+
+    async def hgetall(self, key):
+        self._purge_expired()
+        return self.hash_store.get(key, {})
+
+    async def exists(self, key):
+        self._purge_expired()
+        return key in self.store or key in self.hash_store
+
+    def _purge_expired(self):
+        import time
+        now = time.time()
+        expired = [k for k, t in self.expirations.items() if t <= now]
+        for k in expired:
+            if k in self.store:
+                del self.store[k]
+            if k in self.hash_store:
+                del self.hash_store[k]
+            del self.expirations[k]
+
+
 class DatabaseManager:
     """데이터베이스 연결 관리자"""
     
@@ -162,8 +256,9 @@ class DatabaseManager:
                 
                 self._redis_client = aioredis.from_url(redis_url, decode_responses=True)
             else:
-                logger.warning("Redis client not available, using mock client")
-                self._redis_client = None
+                logger.warning("Redis client not available, using in-memory fallback for local dev")
+                # Use in-memory async client for local development when Redis isn't installed
+                self._redis_client = InMemoryRedisClient()
             
             # 연결 테스트
             if self._redis_client:
@@ -226,19 +321,21 @@ class DatabaseManager:
         # - region_name = 'ap-northeast-2' 등 실제 리전 설정
         # - AWS 자격증명 설정 (IAM 역할)
         try:
-            # LocalStack DynamoDB 연결 (4566 포트)
+            import os
+            host = os.getenv('LOCALSTACK_HOST', 'localhost')
+            endpoint = f"http://{host}:4566"
+            region = 'us-east-1'
             self._dynamodb_resource = boto3.resource(
                 'dynamodb',
-                endpoint_url='http://localhost:4566',  # LocalStack 포트
-                region_name='us-east-1',
+                endpoint_url=endpoint,
+                region_name=region,
                 aws_access_key_id='dummy',
                 aws_secret_access_key='dummy'
             )
-            
             self._dynamodb_client = boto3.client(
                 'dynamodb',
-                endpoint_url='http://localhost:4566',  # LocalStack 포트
-                region_name='us-east-1',
+                endpoint_url=endpoint,
+                region_name=region,
                 aws_access_key_id='dummy',
                 aws_secret_access_key='dummy'
             )
