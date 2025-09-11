@@ -199,10 +199,11 @@ class MessageProducer:
                 logger.warning("Kafka send failed, trying SQS fallback", error=e, exc_info=True)
         
         # SQS 폴백
-        if self.sqs_client and self.config.messaging.sqs_queue_url:
+        queue_url = self.config.messaging.sqs_queue_urls.get(topic)
+        if self.sqs_client and queue_url:
             try:
                 response = self.sqs_client.send_message(
-                    QueueUrl=self.config.messaging.sqs_queue_url,
+                    QueueUrl=queue_url,
                     MessageBody=json.dumps(enriched_message, default=str),
                     MessageAttributes={
                         'topic': {
@@ -218,7 +219,7 @@ class MessageProducer:
                 
                 logger.debug(
                     "Message sent to SQS",
-                    queue_url=self.config.messaging.sqs_queue_url,
+                    queue_url=queue_url,
                     message_id=response['MessageId']
                 )
                 return True

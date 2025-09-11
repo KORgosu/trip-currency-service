@@ -31,10 +31,27 @@ class DataProcessor:
     """데이터 처리자"""
     
     def __init__(self):
-        self.mysql_helper = MySQLHelper()
-        self.redis_helper = RedisHelper()
+        # __init__에서는 helper 객체를 미리 생성하지 않습니다.
+        self._mysql_helper: Optional[MySQLHelper] = None
+        self._redis_helper: Optional[RedisHelper] = None
         self.batch_size = 100
         self.duplicate_check_enabled = True
+
+    # --- [핵심 수정: @property 추가] ---
+    # 각 helper를 처음 사용할 때 생성하는 프로퍼티(property)를 추가합니다.
+    @property
+    def mysql_helper(self) -> MySQLHelper:
+        if self._mysql_helper is None:
+            # self.mysql_helper가 처음 호출되는 순간 객체를 생성합니다.
+            self._mysql_helper = MySQLHelper()
+        return self._mysql_helper
+
+    @property
+    def redis_helper(self) -> RedisHelper:
+        if self._redis_helper is None:
+            # self.redis_helper가 처음 호출되는 순간 객체를 생성합니다.
+            self._redis_helper = RedisHelper()
+        return self._redis_helper
     
     async def initialize(self):
         """처리자 초기화"""
@@ -439,50 +456,52 @@ class DataProcessor:
             )
     
     async def generate_daily_aggregates(self, target_date: datetime = None):
-        """일별 집계 데이터 생성"""
         if target_date is None:
-            target_date = DateTimeUtils.utc_now() - timedelta(days=1)  # 어제 데이터
+            target_date = DateTimeUtils.utc_now() - timedelta(days=1)
         
         logger.info("Generating daily aggregates", target_date=DateTimeUtils.get_date_string(target_date))
         
         try:
-            # 일별 집계 쿼리
             aggregate_query = """
                 INSERT INTO daily_exchange_rates 
-                (currency_code, trade_date, open_rate, close_rate, high_rate, low_rate, avg_rate, volume, volatility, created_at)
+                (currency_code, trade_date, open_rate, close_rate, high_rate, low_rate, avg_rate, volume, volatility, updated_at)
                 SELECT 
                     currency_code,
                     DATE(recorded_at) as trade_date,
                     (SELECT deal_base_rate FROM exchange_rate_history h2 
-                     WHERE h2.currency_code = h1.currency_code 
-                     AND DATE(h2.recorded_at) = DATE(h1.recorded_at)
-                     ORDER BY h2.recorded_at ASC LIMIT 1) as open_rate,
+                        WHERE h2.currency_code = h1.currency_code 
+                        AND DATE(h2.recorded_at) = %s
+                        ORDER BY h2.recorded_at ASC LIMIT 1) as open_rate,
                     (SELECT deal_base_rate FROM exchange_rate_history h2 
-                     WHERE h2.currency_code = h1.currency_code 
-                     AND DATE(h2.recorded_at) = DATE(h1.recorded_at)
-                     ORDER BY h2.recorded_at DESC LIMIT 1) as close_rate,
+                        WHERE h2.currency_code = h1.currency_code 
+                        AND DATE(h2.recorded_at) = %s
+                        ORDER BY h2.recorded_at DESC LIMIT 1) as close_rate,
                     MAX(deal_base_rate) as high_rate,
                     MIN(deal_base_rate) as low_rate,
                     AVG(deal_base_rate) as avg_rate,
                     COUNT(*) as volume,
                     STDDEV(deal_base_rate) as volatility,
-                    NOW() as created_at
+                    CURRENT_TIMESTAMP as updated_at
                 FROM exchange_rate_history h1
                 WHERE DATE(recorded_at) = %s
                 GROUP BY currency_code, DATE(recorded_at)
                 ON DUPLICATE KEY UPDATE
+                    open_rate = VALUES(open_rate),
                     close_rate = VALUES(close_rate),
                     high_rate = VALUES(high_rate),
                     low_rate = VALUES(low_rate),
                     avg_rate = VALUES(avg_rate),
                     volume = VALUES(volume),
                     volatility = VALUES(volatility),
-                    created_at = VALUES(created_at)
+                    updated_at = VALUES(updated_at)
             """
+            
+            target_date_str = target_date.date().isoformat()
             
             affected_rows = await self.mysql_helper.execute_update(
                 aggregate_query, 
-                (target_date.date(),)
+                # 쿼리 안의 %s 3개에 각각 값을 전달
+                (target_date_str, target_date_str, target_date_str)
             )
             
             logger.info(
@@ -492,7 +511,7 @@ class DataProcessor:
             )
             
         except Exception as e:
-            logger.error("Failed to generate daily aggregates", error=e)
+            logger.error("Failed to generate daily aggregates", error=e, exc_info=True)
             raise DatabaseError(
                 "Failed to generate daily aggregates",
                 operation="aggregate",
