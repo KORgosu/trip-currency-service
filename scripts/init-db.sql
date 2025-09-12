@@ -103,7 +103,8 @@ CREATE TABLE IF NOT EXISTS collection_logs (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 기본 통화 데이터 삽입
-INSERT INTO currencies (currency_code, currency_name_ko, currency_name_en, country_code, country_name_ko, country_name_en, symbol, display_order) VALUES
+INSERT INTO currencies (currency_code, currency_name_ko, currency_name_en, country_code, country_name_ko, country_name_en, symbol, display_order) 
+VALUES
 ('USD', '미국 달러', 'US Dollar', 'US', '미국', 'United States', '$', 1),
 ('JPY', '일본 엔', 'Japanese Yen', 'JP', '일본', 'Japan', '¥', 2),
 ('EUR', '유럽연합 유로', 'Euro', 'EU', '유럽연합', 'European Union', '€', 3),
@@ -115,26 +116,29 @@ INSERT INTO currencies (currency_code, currency_name_ko, currency_name_en, count
 ('HKD', '홍콩 달러', 'Hong Kong Dollar', 'HK', '홍콩', 'Hong Kong', 'HK$', 9),
 ('SGD', '싱가포르 달러', 'Singapore Dollar', 'SG', '싱가포르', 'Singapore', 'S$', 10),
 ('KRW', '한국 원', 'Korean Won', 'KR', '한국', 'South Korea', '₩', 11)
+AS new_data  -- Alias for new values
 ON DUPLICATE KEY UPDATE
-    currency_name_ko = VALUES(currency_name_ko),
-    currency_name_en = VALUES(currency_name_en),
-    country_name_ko = VALUES(country_name_ko),
-    country_name_en = VALUES(country_name_en),
-    symbol = VALUES(symbol),
-    display_order = VALUES(display_order);
+    currency_name_ko = new_data.currency_name_ko,
+    currency_name_en = new_data.currency_name_en,
+    country_name_ko = new_data.country_name_ko,
+    country_name_en = new_data.country_name_en,
+    symbol = new_data.symbol,
+    display_order = new_data.display_order;
 
 -- 샘플 환율 데이터 삽입 (테스트용)
-INSERT INTO exchange_rate_history (currency_code, currency_name, deal_base_rate, tts, ttb, source, recorded_at) VALUES
+INSERT INTO exchange_rate_history (currency_code, currency_name, deal_base_rate, tts, ttb, source, recorded_at) 
+VALUES
 ('USD', '미국 달러', 1392.40, 1420.85, 1363.95, 'sample', NOW() - INTERVAL 1 HOUR),
 ('JPY', '일본 엔', 9.46, 9.65, 9.27, 'sample', NOW() - INTERVAL 1 HOUR),
 ('EUR', '유럽연합 유로', 1456.80, 1486.94, 1426.66, 'sample', NOW() - INTERVAL 1 HOUR),
 ('GBP', '영국 파운드', 1678.50, 1712.07, 1644.93, 'sample', NOW() - INTERVAL 1 HOUR),
 ('CNY', '중국 위안', 192.30, 196.15, 188.45, 'sample', NOW() - INTERVAL 1 HOUR)
+AS new_rates  -- CRITICAL ALIAS ADDITION
 ON DUPLICATE KEY UPDATE
-    deal_base_rate = VALUES(deal_base_rate),
-    tts = VALUES(tts),
-    ttb = VALUES(ttb),
-    recorded_at = VALUES(recorded_at);
+    deal_base_rate = new_rates.deal_base_rate,
+    tts = new_rates.tts,
+    ttb = new_rates.ttb,
+    recorded_at = new_rates.recorded_at;
 
 -- 파티셔닝 설정 (대용량 데이터 처리용)
 -- 주의: 파티셔닝은 기존 데이터가 있으면 적용할 수 없으므로 초기 설정 시에만 사용
@@ -145,7 +149,8 @@ ON DUPLICATE KEY UPDATE
 --     PARTITION p2025 VALUES LESS THAN (2026),
 --     PARTITION p_future VALUES LESS THAN MAXVALUE
 -- );
-
+ALTER TABLE exchange_rate_history DROP INDEX IF EXISTS idx_exchange_rate_latest;
+ALTER TABLE daily_exchange_rates DROP INDEX IF EXISTS idx_daily_rates_latest;
 -- 성능 최적화를 위한 추가 인덱스
 CREATE INDEX idx_exchange_rate_latest ON exchange_rate_history (currency_code, recorded_at DESC, deal_base_rate);
 CREATE INDEX idx_daily_rates_latest ON daily_exchange_rates (currency_code, trade_date DESC, close_rate);
@@ -173,9 +178,11 @@ INNER JOIN (
 WHERE c.is_active = TRUE
 ORDER BY c.display_order;
 
--- 프로시저: 일별 집계 데이터 생성
+-- 프로시저: 일별 집계 데이터 생성 (수정된 버전)
 DELIMITER //
-CREATE PROCEDURE IF NOT EXISTS GenerateDailyAggregates(IN target_date DATE)
+DROP PROCEDURE IF EXISTS GenerateDailyAggregates;
+
+CREATE PROCEDURE GenerateDailyAggregates(IN in_target_date DATE)
 BEGIN
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
@@ -186,26 +193,38 @@ BEGIN
     START TRANSACTION;
     
     INSERT INTO daily_exchange_rates 
-    (currency_code, trade_date, open_rate, close_rate, high_rate, low_rate, avg_rate, volume, volatility)
+        (currency_code, trade_date, open_rate, close_rate, high_rate, low_rate, avg_rate, volume, volatility)
     SELECT 
         currency_code,
-        DATE(recorded_at) as trade_date,
-        (SELECT deal_base_rate FROM exchange_rate_history h2 
-         WHERE h2.currency_code = h1.currency_code 
-         AND DATE(h2.recorded_at) = target_date
-         ORDER BY h2.recorded_at ASC LIMIT 1) as open_rate,
-        (SELECT deal_base_rate FROM exchange_rate_history h2 
-         WHERE h2.currency_code = h1.currency_code 
-         AND DATE(h2.recorded_at) = target_date
-         ORDER BY h2.recorded_at DESC LIMIT 1) as close_rate,
-        MAX(deal_base_rate) as high_rate,
-        MIN(deal_base_rate) as low_rate,
-        AVG(deal_base_rate) as avg_rate,
-        COUNT(*) as volume,
-        STDDEV(deal_base_rate) as volatility
-    FROM exchange_rate_history h1
-    WHERE DATE(recorded_at) = target_date
-    GROUP BY currency_code
+        trade_date,
+        MAX(open_rate),
+        MAX(close_rate),
+        MAX(high_rate),
+        MIN(low_rate),
+        AVG(deal_base_rate),
+        COUNT(*),
+        STDDEV(deal_base_rate)
+    FROM (
+        SELECT 
+            h.currency_code,  -- Added table alias
+            DATE(h.recorded_at) AS trade_date,
+            h.deal_base_rate,
+            FIRST_VALUE(h.deal_base_rate) OVER (
+                PARTITION BY h.currency_code, DATE(h.recorded_at)
+                ORDER BY h.recorded_at
+            ) AS open_rate,
+            LAST_VALUE(h.deal_base_rate) OVER (
+                PARTITION BY h.currency_code, DATE(h.recorded_at)
+                ORDER BY h.recorded_at 
+                RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+            ) AS close_rate,
+            MAX(h.deal_base_rate) OVER w AS high_rate,
+            MIN(h.deal_base_rate) OVER w AS low_rate
+        FROM exchange_rate_history h  -- Explicit alias added
+        WHERE DATE(h.recorded_at) = in_target_date  -- FIX: Added table alias
+        WINDOW w AS (PARTITION BY h.currency_code, DATE(h.recorded_at))  
+    ) AS agg
+    GROUP BY currency_code, trade_date
     ON DUPLICATE KEY UPDATE
         open_rate = VALUES(open_rate),
         close_rate = VALUES(close_rate),
@@ -219,7 +238,6 @@ BEGIN
     COMMIT;
 END //
 DELIMITER ;
-
 -- 함수: 환율 변화율 계산
 DELIMITER //
 CREATE FUNCTION IF NOT EXISTS CalculateChangePercent(current_rate DECIMAL(18,4), previous_rate DECIMAL(18,4))

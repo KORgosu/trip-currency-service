@@ -16,6 +16,26 @@
 # 6. SQS 큐 생성
 # 7. VPC 및 보안 그룹 설정
 # 8. IAM 역할 및 정책 설정
+# --- [공통 환경 변수 템플릿] ---
+x-common-env: &common-env
+  ENVIRONMENT: local
+  DB_HOST: mysql
+  DB_PORT: 3306
+  DB_NAME: currency_db
+  DB_USER: currency_user
+  DB_PASSWORD: password
+  REDIS_HOST: redis
+  REDIS_PORT: 6379
+  KAFKA_BOOTSTRAP_SERVERS: kafka:9093
+  AWS_REGION: ap-northeast-2 # SQS 리전 일치
+  AWS_ACCESS_KEY_ID: test
+  AWS_SECRET_ACCESS_KEY: test
+  DYNAMODB_ENDPOINT: http://localstack:4566
+  SQS_ENDPOINT: http://localstack:4566
+  SQS_EXCHANGE_RATES_QUEUE_URL: http://localstack:4566/000000000000/exchange-rates
+  SQS_USER_EVENTS_QUEUE_URL: http://localstack:4566/000000000000/user-events
+  SQS_RANKING_EVENTS_QUEUE_URL: http://localstack:4566/000000000000/ranking-events
+  SQS_DLQ_URL: http://localstack:4566/000000000000/data-processing-dlq
 
 services:
   # TODO: AWS 실시간 시 제거 - LocalStack은 개발/테스트용으로만 사용
@@ -37,34 +57,23 @@ services:
       # 초기화 스크립트
       INIT_SCRIPTS_PATH: /etc/localstack/init/ready.d
       # 권한 문제 해결을 위한 설정
+      DEFAULT_REGION: ap-northeast-2
       LOCALSTACK_HOST: localhost
       # 볼륨 마운트 경로 변경
       TMPDIR: /var/lib/localstack/tmp
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock"
       - localstack_data:/var/lib/localstack
-      - ./scripts/localstack-init:/etc/localstack/init/ready.d
-    command: >
-      bash -c "
-        # 디렉토리 생성 및 권한 설정
-        mkdir -p /var/lib/localstack/data
-        mkdir -p /var/lib/localstack/tmp
-        chmod -R 755 /var/lib/localstack
-        
-        # 기존 프로세스 정리
-        pkill -f localstack || true
-        
-        # LocalStack 시작
-        exec localstack start --host=0.0.0.0
-      "
+      - ./scripts/localstack-init:/etc/localstack/init/ready.d/
+    networks:
+      - currency-network
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
       timeout: 30s
-      retries: 10
+      retries: 3
       interval: 10s
       start_period: 60s
 
-  # MySQL (Aurora 대신)
   mysql:
     image: mysql:8.0
     container_name: currency-mysql
@@ -78,13 +87,16 @@ services:
     volumes:
       - mysql_data:/var/lib/mysql
       - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
-    command: --default-authentication-plugin=mysql_native_password
+      - ./mysql-config/my.cnf:/etc/mysql/conf.d/my.cnf
+    networks:
+      - currency-network
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-ppassword"]
       timeout: 20s
-      retries: 10
+      retries: 5
+      interval: 10s
+      start_period: 150s
 
-  # Redis (ElastiCache 대신)
   redis:
     image: redis:7-alpine
     container_name: currency-redis
@@ -93,10 +105,14 @@ services:
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes
+    networks:
+      - currency-network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       timeout: 10s
       retries: 5
+      interval: 10s
+      start_period: 20s
 
   zookeeper:
     image: bitnami/zookeeper:3.8
@@ -106,32 +122,27 @@ services:
       - zookeeper_data:/bitnami/zookeeper
     environment:
       - ALLOW_ANONYMOUS_LOGIN=yes
+    networks:
+      - currency-network
 
   kafka:
     image: bitnami/kafka:3.4
     ports:
-      - "9092:9092" # 외부 접속용 포트 (호스트 머신 -> 컨테이너)
+      - "9092:9092"
     volumes:
       - kafka_data:/bitnami/kafka
     environment:
-      # --- [수정된 부분 시작] ---
-      # 리스너 프로토콜 맵 정의
       - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
-      # 각 리스너가 수신할 주소 설정
-      # INTERNAL은 컨테이너 내부 통신용, EXTERNAL은 외부(호스트) 통신용
       - KAFKA_CFG_LISTENERS=INTERNAL://:9093,EXTERNAL://:9092
-      # 클라이언트에게 알려줄(광고할) 주소 설정
-      # 내부 통신은 서비스 이름(kafka)으로, 외부 통신은 localhost로 알려줌
       - KAFKA_CFG_ADVERTISED_LISTENERS=INTERNAL://kafka:9093,EXTERNAL://localhost:9092
-      # 브로커 간 통신에 사용할 리스너 이름
       - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=INTERNAL
-      # --- [수정된 부분 끝] ---
       - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
       - ALLOW_PLAINTEXT_LISTENER=yes
     depends_on:
       - zookeeper
+    networks:
+      - currency-network
 
-  # Kafka UI (개발용)
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
     container_name: currency-kafka-ui
@@ -141,9 +152,115 @@ services:
       - "8081:8080"
     environment:
       KAFKA_CLUSTERS_0_NAME: local-kafka
-      # --- [수정] Kafka의 내부 통신용(INTERNAL) 리스너 주소로 변경 ---
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9093
       DYNAMIC_CONFIG_ENABLED: 'true'
+    networks:
+      - currency-network
+
+  currency-service:
+    build:
+      context: .
+      dockerfile: ./services/currency-service/Dockerfile
+    container_name: currency-service
+    command: sh -c "echo 'Data Ingestor is waiting for 30 seconds before starting...' && sleep 30 && python main.py"
+    ports:
+      - "8001:8000"
+    environment:
+      <<: *common-env
+      SERVICE_NAME: currency-service
+      PORT: "8000"
+    depends_on:
+      mysql: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      kafka: { condition: service_started }
+      localstack: { condition: service_healthy }
+    networks:
+      - currency-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 160s
+
+  # Ranking Service
+  ranking-service:
+    build:
+      context: .
+      dockerfile: ./services/ranking-service/Dockerfile
+    container_name: ranking-service
+    command: sh -c "echo 'Data Ingestor is waiting for 30 seconds before starting...' && sleep 30 && python main.py"
+    ports:
+      - "8002:8000"
+    environment:
+      <<: *common-env
+      SERVICE_NAME: ranking-service
+      PORT: "8000"
+    depends_on:
+      mysql: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      kafka: { condition: service_started }
+      localstack: { condition: service_healthy }
+    networks:
+      - currency-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 160s
+
+  # History Service
+  history-service:
+    build:
+      context: .
+      dockerfile: ./services/history-service/Dockerfile
+    container_name: history-service
+    command: sh -c "echo 'Data Ingestor is waiting for 30 seconds before starting...' && sleep 30 && python main.py"
+    ports:
+      - "8003:8000"
+    environment:
+      <<: *common-env
+      SERVICE_NAME: history-service
+      PORT: "8000"
+    depends_on:
+      mysql: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      kafka: { condition: service_started }
+      localstack: { condition: service_healthy }
+    networks:
+      - currency-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 160s
+
+  # Data Ingestor Service
+  data-ingestor:
+    build:
+      context: .
+      dockerfile: ./services/data-ingestor/Dockerfile
+    container_name: data-ingestor
+    command: sh -c "echo 'Data Ingestor is waiting for 30 seconds before starting...' && sleep 30 && python main.py"
+    environment:
+      <<: *common-env
+      SERVICE_NAME: data-ingestor
+      EXECUTION_MODE: scheduler
+    depends_on:
+      mysql: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      kafka: { condition: service_started }
+      localstack: { condition: service_healthy }
+    networks:
+      - currency-network
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "python.*main.py"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 160s
 
 volumes:
   mysql_data:
@@ -153,5 +270,5 @@ volumes:
   localstack_data:
 
 networks:
-  default:
-    name: currency-network
+  currency-network:
+    driver: bridge

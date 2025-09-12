@@ -59,18 +59,13 @@ class ExternalAPIConfig:
 @dataclass
 class MessagingConfig:
     """메시징 설정"""
-    # Kafka 설정 (AWS MSK 또는 로컬)
-    kafka_bootstrap_servers: str = "localhost:9092"  # 로컬 기본값
-    kafka_security_protocol: str = "PLAINTEXT"  # AWS에서는 SSL
+    # Kafka 설정
+    kafka_bootstrap_servers: str
+    kafka_security_protocol: str
     
-    # SQS 설정 (AWS에서만 사용)
-    sqs_queue_url: str = ""
+    # SQS 설정
+    sqs_queue_urls: Dict[str, str] # 토픽 이름을 키로, 큐 URL을 값으로 저장
     sqs_region: str = "ap-northeast-2"
-    
-    # 토픽 이름
-    exchange_rates_topic: str = "exchange-rates"
-    price_indices_topic: str = "price-indices"
-    user_events_topic: str = "user-events"
 
 
 @dataclass
@@ -94,6 +89,8 @@ class AppConfig:
     rate_limit_per_minute: int = 100
     
     # 데이터베이스 설정
+    sqs_endpoint: Optional[str] = None
+    dynamodb_endpoint: Optional[str] = None
     database: DatabaseConfig = None
     
     # 외부 API 설정
@@ -131,6 +128,9 @@ class ConfigManager:
             service_name=self.service_name,
             service_version=os.getenv("SERVICE_VERSION", "1.0.0-local"),
             log_level=os.getenv("LOG_LEVEL", "DEBUG"),
+
+            sqs_endpoint=os.getenv("SQS_ENDPOINT"),
+            dynamodb_endpoint=os.getenv("DYNAMODB_ENDPOINT"),
             
             database=DatabaseConfig(
                 # 로컬 MySQL (Docker Compose)
@@ -160,7 +160,15 @@ class ConfigManager:
             
             messaging=MessagingConfig(
                 kafka_bootstrap_servers=os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
-                kafka_security_protocol="PLAINTEXT"
+                kafka_security_protocol="PLAINTEXT",
+                sqs_region=os.getenv("AWS_REGION", "ap-northeast-2"),
+                # --- [핵심 수정: 여러 큐 URL 환경 변수를 읽어 딕셔너리로 만듦] ---
+                sqs_queue_urls={
+                    "exchange-rates": os.getenv("SQS_EXCHANGE_RATES_QUEUE_URL", ""),
+                    "user-events": os.getenv("SQS_USER_EVENTS_QUEUE_URL", ""),
+                    "ranking-events": os.getenv("SQS_RANKING_EVENTS_QUEUE_URL", ""),
+                    "dlq": os.getenv("SQS_DLQ_URL", "")
+                }
             ),
             
             cors_origins=["http://localhost:3000", "http://localhost:8000"]
