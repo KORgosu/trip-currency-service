@@ -85,6 +85,7 @@ const Header = () => {
         <Nav>
           <NavLink to="/">홈</NavLink>
           <NavLink to="/comparison">비교</NavLink>
+          <NavLink to="/ranking">랭킹</NavLink>
         </Nav>
       </HeaderContent>
     </HeaderContainer>

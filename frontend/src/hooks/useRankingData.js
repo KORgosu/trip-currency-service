@@ -3,61 +3,47 @@ import apiService from '../services/api';
 
 // 랭킹 데이터를 관리하는 커스텀 훅
 const useRankingData = () => {
-  const [rankings, setRankings] = useState(() => {
-    try {
-      const cached = localStorage.getItem('ranking_cache_daily');
-      if (cached) return JSON.parse(cached);
-      // Fallback: rebuild from local click counts
-      const countsRaw = localStorage.getItem('ranking_local_counts');
-      if (countsRaw) {
-        const counts = JSON.parse(countsRaw);
-        const entries = Object.entries(counts).filter(([_, v]) => v > 0);
-        if (entries.length) {
-          const ranking = entries
-            .sort((a,b) => b[1]-a[1])
-            .map(([code, count], idx) => ({
-              country_code: code,
-              country_name: code,
-              selection_count: count,
-              rank: idx + 1
-            }));
-          return {
-            period: 'daily',
-            total_selections: ranking.reduce((s,it)=>s+it.selection_count,0),
-            last_updated: new Date().toISOString(),
-            ranking
-          };
-        }
-      }
-    } catch {}
-    return null;
-  });
+  const [rankings, setRankings] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  // 랭킹 데이터 가져오기 (위로 올려 useEffect에서 참조 가능하게)
+  // 랭킹 데이터 가져오기
   const fetchRankings = useCallback(async (period = 'daily', limit = 10, offset = 0) => {
     setLoading(true);
     setError(null);
 
     try {
-      const response = await apiService.getRankings(period, limit, offset);
-      const newData = response.data;
-  setRankings(prev => {
-        // If server returned empty ranking but we already have data, keep previous
-        if (prev && prev.ranking && prev.ranking.length > 0 && (!newData.ranking || newData.ranking.length === 0)) {
-          console.debug('[Ranking] Skip overwrite with empty result; keeping existing data');
-          return prev;
-        }
-        return newData;
+      console.log(`[useRankingData] 랭킹 데이터 요청: period=${period}, limit=${limit}, offset=${offset}`);
+      
+      // 직접 fetch로 시도
+      const url = `http://localhost:8002/api/v1/rankings?period=${period}&_=${Date.now()}`;
+      console.log(`[useRankingData] 직접 fetch URL: ${url}`);
+      
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       });
-      // persist only if non-empty
-      if (period === 'daily' && newData.ranking && newData.ranking.length > 0) {
-        try { localStorage.setItem('ranking_cache_daily', JSON.stringify(newData)); } catch {}
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
+      
+      const rawData = await response.json();
+      console.log(`[useRankingData] 직접 fetch 응답:`, rawData);
+      
+      const newData = rawData.data || rawData;
+      console.log(`[useRankingData] 처리된 데이터:`, newData);
+      
+      // 항상 새로운 데이터로 업데이트 (빈 데이터라도)
+      console.log('[useRankingData] 랭킹 데이터 업데이트:', newData);
+      setRankings(newData);
+      
       return newData;
     } catch (err) {
       const errorMessage = err.message || '랭킹 데이터를 가져오는데 실패했습니다.';
+      console.error('[useRankingData] 랭킹 데이터 요청 실패:', err);
       setError(errorMessage);
       throw err;
     } finally {
@@ -65,11 +51,15 @@ const useRankingData = () => {
     }
   }, []);
 
-  // 최초 마운트시 캐시 보여주고 비동기 새로고침
+  // 최초 마운트시 백엔드에서 최신 데이터 가져오기
   useEffect(() => {
+    console.log('[useRankingData] 컴포넌트 마운트 - 최신 데이터 가져오기');
+    
     const t = setTimeout(() => {
-      fetchRankings('daily', 10, 0).catch(()=>{});
-    }, 50);
+      fetchRankings('daily', 10, 0).catch((err) => {
+        console.error('[useRankingData] 초기 데이터 로드 실패:', err);
+      });
+    }, 100);
     return () => clearTimeout(t);
   }, [fetchRankings]);
 
@@ -83,7 +73,7 @@ const useRankingData = () => {
         referrer: window.location.href
       };
 
-  if (!options.deferOptimistic) {
+      if (!options.deferOptimistic) {
         // Optimistic 업데이트: 현재 rankings가 있으면 선택 카운트 +1 반영
         setRankings(prev => {
           if (!prev || !prev.ranking) return prev;
@@ -101,31 +91,34 @@ const useRankingData = () => {
           prev.ranking = [...prev.ranking]
             .sort((a,b) => b.selection_count - a.selection_count)
             .map((it, idx) => ({ ...it, rank: idx + 1 }));
-          // persist optimistic
-          try { localStorage.setItem('ranking_cache_daily', JSON.stringify(prev)); } catch {}
           return { ...prev };
         });
-        // also persist raw counts map
-        try {
-          const countsRaw = localStorage.getItem('ranking_local_counts');
-          const counts = countsRaw ? JSON.parse(countsRaw) : {};
-            counts[countryCode] = (counts[countryCode] || 0) + 1;
-          localStorage.setItem('ranking_local_counts', JSON.stringify(counts));
-        } catch {}
       }
 
-      const response = await apiService.recordSelection(selectionData);
-      console.log('사용자 선택 기록 완료:', response);
+      const response = await fetch('http://localhost:8002/api/v1/rankings/selections', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(selectionData)
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      console.log('사용자 선택 기록 완료:', result);
       
       if (!options.deferRefresh) {
-        await new Promise(r => setTimeout(r, 120));
+        await new Promise(r => setTimeout(r, 500));
         await fetchRankings('daily', 10, 0);
       }
       
-      return response;
+      return result;
     } catch (err) {
       console.error('사용자 선택 기록 실패:', err);
-      throw err; // 선택 기록 실패를 상위로 전파
+      throw err;
     }
   }, [fetchRankings]);
 
@@ -135,8 +128,7 @@ const useRankingData = () => {
     const successCodes = [];
     for (const code of countryCodes) {
       try {
-  // 선택 단계에서는 카운트( optimistic ) 반영 안 하고 검색 실행 시에만 반영
-  await recordUserSelection(code, userId, sessionId, { deferRefresh: true, deferOptimistic: true });
+        await recordUserSelection(code, userId, sessionId, { deferRefresh: true, deferOptimistic: true });
         successCodes.push(code);
       } catch (e) {
         console.error('배치 기록 실패:', code, e);
@@ -144,8 +136,7 @@ const useRankingData = () => {
     }
     if (successCodes.length === 0) {
       console.warn('[Ranking] 모든 선택 기록 실패 (서버 다운 가능).');
-  // 서버 응답 실패 시 사용자에게 알려주기 위한 에러 상태 설정
-  setError('선택 기록 서버에 연결되지 않아 랭킹이 갱신되지 않았습니다. 랭킹 서비스(포트 8002)가 실행 중인지 확인하세요.');
+      setError('선택 기록 서버에 연결되지 않아 랭킹이 갱신되지 않았습니다. 랭킹 서비스(포트 8002)가 실행 중인지 확인하세요.');
     } else {
       // 성공한 것들만 낙관적 1회 반영
       setRankings(prev => {
@@ -168,13 +159,6 @@ const useRankingData = () => {
           .sort((a,b) => b.selection_count - a.selection_count)
           .map((it, idx) => ({ ...it, rank: idx + 1 }));
         const next = { ...prev, ranking: updated };
-        try { localStorage.setItem('ranking_cache_daily', JSON.stringify(next)); } catch {}
-        try {
-          const countsRaw = localStorage.getItem('ranking_local_counts');
-          const counts = countsRaw ? JSON.parse(countsRaw) : {};
-          successCodes.forEach(code => { counts[code] = (counts[code] || 0) + 1; });
-          localStorage.setItem('ranking_local_counts', JSON.stringify(counts));
-        } catch {}
         return next;
       });
     }

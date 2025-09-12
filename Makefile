@@ -37,17 +37,17 @@ setup:
 
 # 초기화 상태 확인
 init-check:
-	@echo "� Cthecking service initialization status..."
+	@echo "Checking service initialization status..."
 	@echo "1. MySQL Connection:"
-	@docker-compose exec mysql mysqladmin ping -h localhost 2>/dev/null && echo "✅ MySQL ready" || echo "❌ MySQL not ready"
+	@docker-compose exec mysql mysqladmin ping -h localhost -u currency_user -p'password' 2>NUL && echo " MySQL ready" || echo " MySQL not ready"
 	@echo "2. Redis Connection:"
-	@docker-compose exec redis redis-cli ping 2>/dev/null && echo "✅ Redis ready" || echo "❌ Redis not ready"
+	@docker-compose exec redis redis-cli ping 2>NUL && echo " Redis ready" || echo " dRedis not ready"
 	@echo "3. LocalStack Health:"
-	@curl -s http://localhost:4566/_localstack/health >/dev/null 2>&1 && echo "✅ LocalStack ready" || echo "❌ LocalStack not ready"
+	@curl -s http://localhost:4566/_localstack/health >NUL 2>&1 && echo " LocalStack ready" || echo " LocalStack not ready"
 	@echo "4. Service Health Checks:"
-	@curl -s http://localhost:8001/health >/dev/null 2>&1 && echo "✅ Currency Service ready" || echo "❌ Currency Service not ready"
-	@curl -s http://localhost:8002/health >/dev/null 2>&1 && echo "✅ Ranking Service ready" || echo "❌ Ranking Service not ready"
-	@curl -s http://localhost:8003/health >/dev/null 2>&1 && echo "✅ History Service ready" || echo "❌ History Service not ready"
+	@curl -s http://localhost:8001/health >NUL 2>&1 && echo " Currency Service ready" || echo " Currency Service not ready"
+	@curl -s http://localhost:8002/health >NUL 2>&1 && echo " Ranking Service ready" || echo " Ranking Service not ready"
+	@curl -s http://localhost:8003/health >NUL 2>&1 && echo " History Service ready" || echo " History Service not ready"
 
 # Docker 이미지 빌드
 build:
@@ -61,7 +61,7 @@ start:
 	@echo "⏳ This may take a few minutes for initial setup..."
 	docker-compose up -d
 	@echo "⏳ Waiting for services to initialize..."
-	@sleep 30
+	@timeout /t 30 /nobreak > nul 2>&1 || ping -n 31 127.0.0.1 > nul 2>&1
 	@echo "✅ Services started!"
 	@echo ""
 	@echo "📊 Available services:"
@@ -196,23 +196,58 @@ run-ingestor-scheduler:
 run-all:
 	@echo "🚀 Starting all services..."
 	@echo "Starting Currency Service..."
-	cd services/currency-service && python main.py &
+	cd services/currency-service && python main.py > currency.log 2>&1 &
+	echo $$! > currency.pid
 	@echo "Starting Ranking Service..."
-	cd services/ranking-service && python main.py &
+	cd services/ranking-service && python main.py > ranking.log 2>&1 &
+	echo $$! > ranking.pid
 	@echo "Starting History Service..."
-	cd services/history-service && python main.py &
+	cd services/history-service && python main.py > history.log 2>&1 &
+	echo $$! > history.pid
 	@echo "Starting Data Ingestor Scheduler..."
-	cd services/data-ingestor && EXECUTION_MODE=scheduler python main.py &
+	cd services/data-ingestor && EXECUTION_MODE=scheduler python main.py > ingestor.log 2>&1 &
+	echo $$! > ingestor.pid
 	@echo "✅ All services started in background"
+	@echo "📊 Service PIDs saved to *.pid files"
+	@echo "📝 Logs available in *.log files"
 	@echo "Use 'make stop-all' to stop all services"
+	@echo "Use 'make status' to check service status"
 
 # 모든 서비스 중지
 stop-all:
 	@echo "🛑 Stopping all services..."
-	pkill -f "currency-service/main.py" || true
-	pkill -f "ranking-service/main.py" || true
-	pkill -f "history-service/main.py" || true
-	pkill -f "data-ingestor/main.py" || true
+	@if [ -f currency.pid ]; then \
+		kill `cat currency.pid` 2>/dev/null || true; \
+		rm -f currency.pid; \
+		echo "✅ Currency Service stopped"; \
+	else \
+		pkill -f "currency-service/main.py" || true; \
+		echo "✅ Currency Service stopped (fallback)"; \
+	fi
+	@if [ -f ranking.pid ]; then \
+		kill `cat ranking.pid` 2>/dev/null || true; \
+		rm -f ranking.pid; \
+		echo "✅ Ranking Service stopped"; \
+	else \
+		pkill -f "ranking-service/main.py" || true; \
+		echo "✅ Ranking Service stopped (fallback)"; \
+	fi
+	@if [ -f history.pid ]; then \
+		kill `cat history.pid` 2>/dev/null || true; \
+		rm -f history.pid; \
+		echo "✅ History Service stopped"; \
+	else \
+		pkill -f "history-service/main.py" || true; \
+		echo "✅ History Service stopped (fallback)"; \
+	fi
+	@if [ -f ingestor.pid ]; then \
+		kill `cat ingestor.pid` 2>/dev/null || true; \
+		rm -f ingestor.pid; \
+		echo "✅ Data Ingestor stopped"; \
+	else \
+		pkill -f "data-ingestor/main.py" || true; \
+		echo "✅ Data Ingestor stopped (fallback)"; \
+	fi
 	@echo "✅ All services stopped"
 
 # 데이터베이스 초기화
@@ -273,7 +308,7 @@ status:
 # 모니터링 대시보드 정보
 monitor:
 	@echo "📊 Monitoring Dashboards:"
-	@echo "  - Kafka UI: http://localhost:8081"
+	@echo "  - Kafka UI: http://localhost:8080"
 	@echo "  - LocalStack Dashboard: http://localhost:4566"
 	@echo "  - Currency Service Health: http://localhost:8001/health"
 	@echo "  - Ranking Service Health: http://localhost:8002/health"

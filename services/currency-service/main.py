@@ -2,6 +2,22 @@
 Currency Service - 실시간 환율 조회 서비스
 FastAPI 기반 웹 서버 (로컬 개발용)
 AWS Lambda 배포 시에는 lambda_handler 함수 사용
+
+주요 기능:
+- 최신 환율 정보 조회 (Redis 캐시 우선)
+- 물가 지수 계산 (빅맥/스타벅스 지수)
+- 캐시 미스 시 Aurora DB 폴백
+- 다중 통화 동시 조회 지원
+
+API 엔드포인트:
+- GET /health: 헬스 체크
+- GET /api/v1/currencies/latest: 최신 환율 조회
+- GET /api/v1/currencies/{currency_code}: 통화별 상세 정보
+- GET /api/v1/price-index: 물가 지수 조회
+
+배포 방식:
+- 로컬: FastAPI 서버 (main.py)
+- AWS: Lambda + API Gateway (lambda_handler)
 """
 import os
 import sys
@@ -12,8 +28,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from fastapi import FastAPI, HTTPException, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, HTMLResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 import uvicorn
 from typing import List, Optional
 
@@ -82,25 +97,15 @@ app = FastAPI(
 )
 
 # CORS 설정
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",  # Vite 개발 서버 (기본 포트)
-        "http://localhost:5174",  # Vite 개발 서버 (실제 실행 포트)
-        "http://localhost:3000",  # React 개발 서버
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:5174",
-        "http://127.0.0.1:3000"
-    ],
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
-)
-
-# 정적 파일 서빙 설정
-static_dir = os.path.join(os.path.dirname(__file__), "static")
-if os.path.exists(static_dir):
-    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+config = get_config() if 'config' in globals() else None
+if config and config.cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=config.cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 
 # 의존성 함수들
@@ -184,12 +189,6 @@ async def general_exception_handler(request, exc: Exception):
     )
 
 
-# CORS OPTIONS 핸들러 추가
-@app.options("/{path:path}")
-async def options_handler(path: str):
-    """CORS preflight 요청 처리"""
-    return {"message": "OK"}
-
 # API 엔드포인트들
 @app.get("/health")
 async def health_check():
@@ -201,458 +200,6 @@ async def health_check():
             "version": get_config().service_version
         }
     )
-
-
-@app.get("/", response_class=HTMLResponse)
-async def frontend_page():
-    """프론트엔드 페이지"""
-    html_content = """
-    <!DOCTYPE html>
-    <html lang="ko">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>환율 및 물가 지수 조회</title>
-        <style>
-            * {
-                margin: 0;
-                padding: 0;
-                box-sizing: border-box;
-            }
-            
-            body {
-                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                min-height: 100vh;
-                padding: 20px;
-            }
-            
-            .container {
-                max-width: 1200px;
-                margin: 0 auto;
-                background: white;
-                border-radius: 15px;
-                box-shadow: 0 20px 40px rgba(0,0,0,0.1);
-                overflow: hidden;
-            }
-            
-            .header {
-                background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-                color: white;
-                padding: 30px;
-                text-align: center;
-            }
-            
-            .header h1 {
-                font-size: 2.5em;
-                margin-bottom: 10px;
-                font-weight: 300;
-            }
-            
-            .header p {
-                font-size: 1.1em;
-                opacity: 0.9;
-            }
-            
-            .content {
-                padding: 30px;
-            }
-            
-            .controls {
-                display: flex;
-                gap: 15px;
-                margin-bottom: 30px;
-                flex-wrap: wrap;
-                align-items: center;
-            }
-            
-            .btn {
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                color: white;
-                border: none;
-                padding: 12px 24px;
-                border-radius: 25px;
-                cursor: pointer;
-                font-size: 14px;
-                font-weight: 500;
-                transition: all 0.3s ease;
-                box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
-            }
-            
-            .btn:hover {
-                transform: translateY(-2px);
-                box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
-            }
-            
-            .btn:active {
-                transform: translateY(0);
-            }
-            
-            .loading {
-                display: none;
-                text-align: center;
-                padding: 20px;
-                color: #666;
-            }
-            
-            .spinner {
-                border: 3px solid #f3f3f3;
-                border-top: 3px solid #667eea;
-                border-radius: 50%;
-                width: 30px;
-                height: 30px;
-                animation: spin 1s linear infinite;
-                margin: 0 auto 10px;
-            }
-            
-            @keyframes spin {
-                0% { transform: rotate(0deg); }
-                100% { transform: rotate(360deg); }
-            }
-            
-            .data-table {
-                width: 100%;
-                border-collapse: collapse;
-                margin-top: 20px;
-                background: white;
-                border-radius: 10px;
-                overflow: hidden;
-                box-shadow: 0 5px 15px rgba(0,0,0,0.08);
-            }
-            
-            .data-table th {
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                color: white;
-                padding: 15px;
-                text-align: left;
-                font-weight: 500;
-                font-size: 14px;
-            }
-            
-            .data-table td {
-                padding: 15px;
-                border-bottom: 1px solid #eee;
-                font-size: 14px;
-            }
-            
-            .data-table tr:hover {
-                background-color: #f8f9ff;
-            }
-            
-            .data-table tr:last-child td {
-                border-bottom: none;
-            }
-            
-            .currency-code {
-                font-weight: bold;
-                color: #667eea;
-            }
-            
-            .rate {
-                font-weight: 600;
-                color: #2c3e50;
-            }
-            
-            .price-index {
-                color: #27ae60;
-                font-weight: 500;
-            }
-            
-            .error {
-                background: #ffebee;
-                color: #c62828;
-                padding: 15px;
-                border-radius: 8px;
-                margin: 20px 0;
-                border-left: 4px solid #c62828;
-            }
-            
-            .info {
-                background: #e3f2fd;
-                color: #1565c0;
-                padding: 15px;
-                border-radius: 8px;
-                margin: 20px 0;
-                border-left: 4px solid #1565c0;
-            }
-            
-            .timestamp {
-                text-align: center;
-                color: #666;
-                font-size: 12px;
-                margin-top: 20px;
-                padding: 10px;
-                background: #f8f9fa;
-                border-radius: 5px;
-            }
-            
-            .graph-icon {
-                width: 20px;
-                height: 20px;
-                background: #667eea;
-                border-radius: 3px;
-                display: inline-block;
-                position: relative;
-            }
-            
-            .graph-icon::after {
-                content: '';
-                position: absolute;
-                top: 50%;
-                left: 50%;
-                transform: translate(-50%, -50%);
-                width: 8px;
-                height: 8px;
-                background: white;
-                border-radius: 1px;
-            }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <div class="header">
-                <h1>🌍 환율 및 물가 지수 조회</h1>
-                <p>실시간 환율 정보와 빅맥/스타벅스 지수를 확인하세요</p>
-            </div>
-            
-            <div class="content">
-                <div class="controls">
-                    <button class="btn" onclick="loadExchangeRates()">💱 환율 조회</button>
-                    <button class="btn" onclick="loadPriceIndex()">🍔 물가 지수 조회</button>
-                    <button class="btn" onclick="loadAllData()">📊 전체 데이터 조회</button>
-                </div>
-                
-                <div class="loading" id="loading">
-                    <div class="spinner"></div>
-                    <p>데이터를 불러오는 중...</p>
-                </div>
-                
-                <div id="error" class="error" style="display: none;"></div>
-                <div id="info" class="info" style="display: none;"></div>
-                
-                <table class="data-table" id="dataTable" style="display: none;">
-                    <thead>
-                        <tr>
-                            <th>국가명</th>
-                            <th>통화</th>
-                            <th>환율 (KRW)</th>
-                            <th>빅맥 지수</th>
-                            <th>스타벅스 지수</th>
-                            <th>그래프</th>
-                        </tr>
-                    </thead>
-                    <tbody id="dataTableBody">
-                    </tbody>
-                </table>
-                
-                <div class="timestamp" id="timestamp"></div>
-            </div>
-        </div>
-        
-        <script>
-            const API_BASE = '/api/v1';
-            
-            function showLoading() {
-                document.getElementById('loading').style.display = 'block';
-                document.getElementById('dataTable').style.display = 'none';
-                document.getElementById('error').style.display = 'none';
-                document.getElementById('info').style.display = 'none';
-            }
-            
-            function hideLoading() {
-                document.getElementById('loading').style.display = 'none';
-            }
-            
-            function showError(message) {
-                hideLoading();
-                const errorDiv = document.getElementById('error');
-                errorDiv.textContent = message;
-                errorDiv.style.display = 'block';
-            }
-            
-            function showInfo(message) {
-                hideLoading();
-                const infoDiv = document.getElementById('info');
-                infoDiv.textContent = message;
-                infoDiv.style.display = 'block';
-            }
-            
-            function updateTimestamp() {
-                const now = new Date();
-                document.getElementById('timestamp').textContent = 
-                    `마지막 업데이트: ${now.toLocaleString('ko-KR')}`;
-            }
-            
-            async function loadExchangeRates() {
-                showLoading();
-                try {
-                    const response = await fetch(`${API_BASE}/currencies/latest?symbols=USD,JPY,EUR,GBP,CNY`);
-                    const data = await response.json();
-                    
-                    if (data.success) {
-                        displayExchangeRates(data.data);
-                    } else {
-                        showError('환율 데이터를 불러오는데 실패했습니다.');
-                    }
-                } catch (error) {
-                    showError('서버 연결에 실패했습니다: ' + error.message);
-                }
-            }
-            
-            async function loadPriceIndex() {
-                showLoading();
-                try {
-                    // 여러 국가의 물가 지수를 조회
-                    const countries = ['US', 'JP', 'GB', 'CN'];
-                    const promises = countries.map(country => 
-                        fetch(`${API_BASE}/price-index?country=${country}`)
-                            .then(res => res.json())
-                    );
-                    
-                    const results = await Promise.all(promises);
-                    const validResults = results.filter(result => result.success);
-                    
-                    if (validResults.length > 0) {
-                        displayPriceIndex(validResults);
-                    } else {
-                        showError('물가 지수 데이터를 불러오는데 실패했습니다.');
-                    }
-                } catch (error) {
-                    showError('서버 연결에 실패했습니다: ' + error.message);
-                }
-            }
-            
-            async function loadAllData() {
-                showLoading();
-                try {
-                    // 환율과 물가 지수를 동시에 조회
-                    const [ratesResponse, ...priceResponses] = await Promise.all([
-                        fetch(`${API_BASE}/currencies/latest?symbols=USD,JPY,EUR,GBP,CNY`),
-                        fetch(`${API_BASE}/price-index?country=US`),
-                        fetch(`${API_BASE}/price-index?country=JP`),
-                        fetch(`${API_BASE}/price-index?country=GB`),
-                        fetch(`${API_BASE}/price-index?country=CN`)
-                    ]);
-                    
-                    const ratesData = await ratesResponse.json();
-                    const priceData = await Promise.all(priceResponses.map(res => res.json()));
-                    
-                    if (ratesData.success) {
-                        displayAllData(ratesData.data, priceData.filter(p => p.success));
-                    } else {
-                        showError('데이터를 불러오는데 실패했습니다.');
-                    }
-                } catch (error) {
-                    showError('서버 연결에 실패했습니다: ' + error.message);
-                }
-            }
-            
-            function displayExchangeRates(data) {
-                hideLoading();
-                const tbody = document.getElementById('dataTableBody');
-                tbody.innerHTML = '';
-                
-                const countryMap = {
-                    'USD': { name: '미국', code: 'US' },
-                    'JPY': { name: '일본', code: 'JP' },
-                    'EUR': { name: '유럽', code: 'EU' },
-                    'GBP': { name: '영국', code: 'GB' },
-                    'CNY': { name: '중국', code: 'CN' }
-                };
-                
-                Object.entries(data.rates).forEach(([currency, rate]) => {
-                    const country = countryMap[currency] || { name: currency, code: currency };
-                    const row = tbody.insertRow();
-                    row.innerHTML = `
-                        <td>${country.name}</td>
-                        <td><span class="currency-code">${currency}</span></td>
-                        <td><span class="rate">${rate.toLocaleString()}원</span></td>
-                        <td>-</td>
-                        <td>-</td>
-                        <td><div class="graph-icon"></div></td>
-                    `;
-                });
-                
-                document.getElementById('dataTable').style.display = 'table';
-                updateTimestamp();
-                showInfo(`환율 데이터를 성공적으로 불러왔습니다. (캐시: ${data.cache_hit ? '적중' : '미적중'})`);
-            }
-            
-            function displayPriceIndex(data) {
-                hideLoading();
-                const tbody = document.getElementById('dataTableBody');
-                tbody.innerHTML = '';
-                
-                const countryMap = {
-                    'US': { name: '미국', currency: 'USD' },
-                    'JP': { name: '일본', currency: 'JPY' },
-                    'GB': { name: '영국', currency: 'GBP' },
-                    'CN': { name: '중국', currency: 'CNY' }
-                };
-                
-                data.forEach(item => {
-                    const country = countryMap[item.data.country_code] || { name: item.data.country_code, currency: item.data.country_code };
-                    const row = tbody.insertRow();
-                    row.innerHTML = `
-                        <td>${country.name}</td>
-                        <td><span class="currency-code">${country.currency}</span></td>
-                        <td>-</td>
-                        <td><span class="price-index">$${item.data.big_mac_index || 'N/A'}</span></td>
-                        <td><span class="price-index">$${item.data.starbucks_index || 'N/A'}</span></td>
-                        <td><div class="graph-icon"></div></td>
-                    `;
-                });
-                
-                document.getElementById('dataTable').style.display = 'table';
-                updateTimestamp();
-                showInfo('물가 지수 데이터를 성공적으로 불러왔습니다.');
-            }
-            
-            function displayAllData(ratesData, priceData) {
-                hideLoading();
-                const tbody = document.getElementById('dataTableBody');
-                tbody.innerHTML = '';
-                
-                const countryMap = {
-                    'USD': { name: '미국', code: 'US' },
-                    'JPY': { name: '일본', code: 'JP' },
-                    'EUR': { name: '유럽', code: 'EU' },
-                    'GBP': { name: '영국', code: 'GB' },
-                    'CNY': { name: '중국', code: 'CN' }
-                };
-                
-                // 환율 데이터를 기준으로 테이블 생성
-                Object.entries(ratesData.rates).forEach(([currency, rate]) => {
-                    const country = countryMap[currency] || { name: currency, code: currency };
-                    
-                    // 해당 국가의 물가 지수 찾기
-                    const priceInfo = priceData.find(p => p.data.country_code === country.code);
-                    
-                    const row = tbody.insertRow();
-                    row.innerHTML = `
-                        <td>${country.name}</td>
-                        <td><span class="currency-code">${currency}</span></td>
-                        <td><span class="rate">${rate.toLocaleString()}원</span></td>
-                        <td><span class="price-index">$${priceInfo ? (priceInfo.data.big_mac_index || 'N/A') : 'N/A'}</span></td>
-                        <td><span class="price-index">$${priceInfo ? (priceInfo.data.starbucks_index || 'N/A') : 'N/A'}</span></td>
-                        <td><div class="graph-icon"></div></td>
-                    `;
-                });
-                
-                document.getElementById('dataTable').style.display = 'table';
-                updateTimestamp();
-                showInfo(`전체 데이터를 성공적으로 불러왔습니다. (환율 캐시: ${ratesData.cache_hit ? '적중' : '미적중'})`);
-            }
-            
-            // 페이지 로드 시 자동으로 환율 데이터 로드
-            window.addEventListener('load', () => {
-                loadExchangeRates();
-            });
-        </script>
-    </body>
-    </html>
-    """
-    return HTMLResponse(content=html_content)
 
 
 @app.get("/api/v1/currencies/latest", response_model=LatestRatesResponse)

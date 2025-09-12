@@ -31,10 +31,27 @@ class DataProcessor:
     """데이터 처리자"""
     
     def __init__(self):
-        self.mysql_helper = MySQLHelper()
-        self.redis_helper = RedisHelper()
+        # __init__에서는 helper 객체를 미리 생성하지 않습니다.
+        self._mysql_helper: Optional[MySQLHelper] = None
+        self._redis_helper: Optional[RedisHelper] = None
         self.batch_size = 100
         self.duplicate_check_enabled = True
+
+    # --- [핵심 수정: @property 추가] ---
+    # 각 helper를 처음 사용할 때 생성하는 프로퍼티(property)를 추가합니다.
+    @property
+    def mysql_helper(self) -> MySQLHelper:
+        if self._mysql_helper is None:
+            # self.mysql_helper가 처음 호출되는 순간 객체를 생성합니다.
+            self._mysql_helper = MySQLHelper()
+        return self._mysql_helper
+
+    @property
+    def redis_helper(self) -> RedisHelper:
+        if self._redis_helper is None:
+            # self.redis_helper가 처음 호출되는 순간 객체를 생성합니다.
+            self._redis_helper = RedisHelper()
+        return self._redis_helper
     
     async def initialize(self):
         """처리자 초기화"""
@@ -165,51 +182,79 @@ class DataProcessor:
         return currency_names.get(currency_code, currency_code)
     
     async def _filter_duplicates(self, processed_data: List[ExchangeRate]) -> List[ExchangeRate]:
-        """중복 데이터 필터링"""
+        """
+        중복 데이터 필터링
+
+        개선된 로직:
+        - 최근 10분 내 동일 소스의 동일 통화 데이터만 중복으로 처리
+        - 환율 변동을 고려하여 0.1% 이내 차이는 동일 값으로 처리
+        - 타임스탬프가 최신인 데이터는 항상 저장
+        """
         if not processed_data:
             return []
-        
+
         try:
-            # 최근 1시간 내 동일 통화의 데이터가 있는지 확인
-            one_hour_ago = DateTimeUtils.utc_now() - timedelta(hours=1)
-            
+            # 최근 10분 내 데이터만 중복 체크 (환율 변동 고려)
+            ten_minutes_ago = DateTimeUtils.utc_now() - timedelta(minutes=10)
+
             filtered_data = []
-            
+
             for item in processed_data:
-                # 중복 체크 쿼리
+                # 중복 체크 쿼리 (개선됨)
                 query = """
-                    SELECT COUNT(*) as count
+                    SELECT COUNT(*) as count, MAX(recorded_at) as latest_timestamp
                     FROM exchange_rate_history
-                    WHERE currency_code = %s 
+                    WHERE currency_code = %s
                         AND source = %s
                         AND recorded_at > %s
-                        AND ABS(deal_base_rate - %s) < 0.01
+                        AND ABS((deal_base_rate - %s) / %s) < 0.001  -- 0.1% 이내 차이
                 """
-                
+
                 result = await self.mysql_helper.execute_query(
-                    query, 
-                    (item.currency_code, item.source, one_hour_ago, float(item.deal_base_rate))
+                    query,
+                    (item.currency_code, item.source, ten_minutes_ago,
+                     float(item.deal_base_rate), float(item.deal_base_rate))
                 )
-                
+
                 if result and result[0]['count'] == 0:
                     # 중복이 아닌 경우만 추가
                     filtered_data.append(item)
-                else:
                     logger.debug(
-                        "Duplicate data filtered",
+                        "New data accepted",
                         currency=item.currency_code,
                         source=item.source,
                         rate=float(item.deal_base_rate)
                     )
-            
-            logger.debug(
+                else:
+                    # 중복 데이터이지만 타임스탬프가 더 최신인 경우 업데이트
+                    latest_timestamp = result[0]['latest_timestamp'] if result else None
+                    if latest_timestamp and item.recorded_at > latest_timestamp:
+                        filtered_data.append(item)
+                        logger.debug(
+                            "Updated data accepted (newer timestamp)",
+                            currency=item.currency_code,
+                            source=item.source,
+                            old_timestamp=latest_timestamp.isoformat(),
+                            new_timestamp=item.recorded_at.isoformat()
+                        )
+                    else:
+                        logger.debug(
+                            "Duplicate data filtered",
+                            currency=item.currency_code,
+                            source=item.source,
+                            rate=float(item.deal_base_rate),
+                            existing_count=result[0]['count'] if result else 0
+                        )
+
+            logger.info(
                 "Duplicate filtering completed",
                 original_count=len(processed_data),
-                filtered_count=len(filtered_data)
+                filtered_count=len(filtered_data),
+                duplicates_filtered=len(processed_data) - len(filtered_data)
             )
-            
+
             return filtered_data
-            
+
         except Exception as e:
             logger.warning("Duplicate filtering failed, proceeding with all data", error=e)
             return processed_data
@@ -411,50 +456,52 @@ class DataProcessor:
             )
     
     async def generate_daily_aggregates(self, target_date: datetime = None):
-        """일별 집계 데이터 생성"""
         if target_date is None:
-            target_date = DateTimeUtils.utc_now() - timedelta(days=1)  # 어제 데이터
+            target_date = DateTimeUtils.utc_now() - timedelta(days=1)
         
         logger.info("Generating daily aggregates", target_date=DateTimeUtils.get_date_string(target_date))
         
         try:
-            # 일별 집계 쿼리
             aggregate_query = """
                 INSERT INTO daily_exchange_rates 
-                (currency_code, trade_date, open_rate, close_rate, high_rate, low_rate, avg_rate, volume, volatility, created_at)
+                (currency_code, trade_date, open_rate, close_rate, high_rate, low_rate, avg_rate, volume, volatility, updated_at)
                 SELECT 
                     currency_code,
                     DATE(recorded_at) as trade_date,
                     (SELECT deal_base_rate FROM exchange_rate_history h2 
-                     WHERE h2.currency_code = h1.currency_code 
-                     AND DATE(h2.recorded_at) = DATE(h1.recorded_at)
-                     ORDER BY h2.recorded_at ASC LIMIT 1) as open_rate,
+                        WHERE h2.currency_code = h1.currency_code 
+                        AND DATE(h2.recorded_at) = %s
+                        ORDER BY h2.recorded_at ASC LIMIT 1) as open_rate,
                     (SELECT deal_base_rate FROM exchange_rate_history h2 
-                     WHERE h2.currency_code = h1.currency_code 
-                     AND DATE(h2.recorded_at) = DATE(h1.recorded_at)
-                     ORDER BY h2.recorded_at DESC LIMIT 1) as close_rate,
+                        WHERE h2.currency_code = h1.currency_code 
+                        AND DATE(h2.recorded_at) = %s
+                        ORDER BY h2.recorded_at DESC LIMIT 1) as close_rate,
                     MAX(deal_base_rate) as high_rate,
                     MIN(deal_base_rate) as low_rate,
                     AVG(deal_base_rate) as avg_rate,
                     COUNT(*) as volume,
                     STDDEV(deal_base_rate) as volatility,
-                    NOW() as created_at
+                    CURRENT_TIMESTAMP as updated_at
                 FROM exchange_rate_history h1
                 WHERE DATE(recorded_at) = %s
                 GROUP BY currency_code, DATE(recorded_at)
                 ON DUPLICATE KEY UPDATE
+                    open_rate = VALUES(open_rate),
                     close_rate = VALUES(close_rate),
                     high_rate = VALUES(high_rate),
                     low_rate = VALUES(low_rate),
                     avg_rate = VALUES(avg_rate),
                     volume = VALUES(volume),
                     volatility = VALUES(volatility),
-                    created_at = VALUES(created_at)
+                    updated_at = VALUES(updated_at)
             """
+            
+            target_date_str = target_date.date().isoformat()
             
             affected_rows = await self.mysql_helper.execute_update(
                 aggregate_query, 
-                (target_date.date(),)
+                # 쿼리 안의 %s 3개에 각각 값을 전달
+                (target_date_str, target_date_str, target_date_str)
             )
             
             logger.info(
@@ -464,7 +511,7 @@ class DataProcessor:
             )
             
         except Exception as e:
-            logger.error("Failed to generate daily aggregates", error=e)
+            logger.error("Failed to generate daily aggregates", error=e, exc_info=True)
             raise DatabaseError(
                 "Failed to generate daily aggregates",
                 operation="aggregate",

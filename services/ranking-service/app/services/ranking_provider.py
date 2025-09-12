@@ -419,34 +419,6 @@ class RankingProvider:
 
             return ranking_data
             
-            # DynamoDB에 저장 (가능한 경우)
-            if self.dynamodb_helper:
-                try:
-                    ranking_item = {
-                        "period": period,
-                        "ranking_data": ranking_data["ranking"],
-                        "total_selections": ranking_data["total_selections"],
-                        "last_updated": ranking_data["last_updated"],
-                        "calculation_metadata": {
-                            "calculation_id": calculation_id,
-                            "calculation_time": datetime.utcnow().isoformat(),
-                            "total_records": ranking_data["total_selections"],
-                            "algorithm_version": "v1.0"
-                        }
-                    }
-                    
-                    await self.dynamodb_helper.put_item(ranking_item)
-                    logger.info(f"Ranking saved to DynamoDB", period=period)
-                    
-                except Exception as e:
-                    logger.warning(f"Failed to save ranking to DynamoDB: {e}")
-            
-            # 캐시 무효화
-            cache_pattern = f"ranking:{period}:*"
-            # Redis에서 패턴 매칭 키 삭제는 복잡하므로 생략
-            
-            return ranking_data
-            
         except Exception as e:
             logger.error(f"Failed to calculate and save ranking for {period}: {e}")
             raise

@@ -5,6 +5,7 @@ import Header from './components/common/Header';
 import Footer from './components/common/Footer';
 import HomePage from './pages/HomePage';
 import ComparisonPage from './pages/ComparisonPage';
+import RankingPage from './pages/RankingPage';
 import './styles/globals.css';
 
 const AppContainer = styled.div`
@@ -30,6 +31,7 @@ function App() {
           <Routes>
             <Route path="/" element={<HomePage />} />
             <Route path="/comparison" element={<ComparisonPage />} />
+            <Route path="/ranking" element={<RankingPage />} />
           </Routes>
         </MainContent>
         <Footer />

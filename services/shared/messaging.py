@@ -13,6 +13,7 @@ import uuid
 if platform.system() == "Windows":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
+<<<<<<< HEAD
 from .config import get_config, Environment
 from .exceptions import MessagingError
 
@@ -28,6 +29,7 @@ def get_logger_safe():
 # 전역 로거 초기화 (지연 로딩)
 logger = get_logger_safe()
 
+<<<<<<< HEAD
 try:
     from aiokafka import AIOKafkaProducer, AIOKafkaConsumer
     from aiokafka.errors import KafkaError
@@ -35,7 +37,12 @@ try:
     logger.info("aiokafka successfully imported")
 except ImportError as e:
     KAFKA_AVAILABLE = False
-    logger.warning(f"aiokafka not available, Kafka functionality disabled: {str(e)}")
+    logger.warning("aiokafka not available, Kafka functionality disabled", error=str(e))
+=======
+# Kafka import (실시간 서비스에서만 사용)
+KAFKA_AVAILABLE = False
+logger.info("Kafka disabled for local development, using SQS only")
+>>>>>>> b7e0365 (error fix with ranking and history service)
 
 try:
     import boto3
@@ -62,47 +69,45 @@ class MessageProducer:
         self.kafka_producer = None
         self.sqs_client = None
         self._initialized = False
+        self.use_kafka = False # Kafka 사용 여부를 인스턴스 변수로 관리
     
     async def initialize(self):
         """프로듀서 초기화"""
         if self._initialized:
             return
         
+        # 필요한 모듈을 함수 내부에서 import하여 순환 참조 및 초기화 순서 문제 방지
+        from shared.config import get_config, Environment
+        from shared.exceptions import MessagingError
+
         try:
-            # 설정 로드
             self.config = get_config()
             
-            # Kafka 프로듀서 초기화
-            if KAFKA_AVAILABLE and self.config.messaging.kafka_bootstrap_servers:
-                await self._init_kafka_producer()
+            # --- [핵심 수정] Kafka 사용 가능 여부를 이 시점에서 최종 결정하고 로그 기록 ---
+            self.use_kafka = KAFKA_INSTALLED and self.config.environment != Environment.LOCAL
             
-            # SQS 클라이언트 초기화 (AWS 환경에서만)
-            if SQS_AVAILABLE and self.config.environment != Environment.LOCAL:
+            if self.use_kafka:
+                logger.info(f"Kafka is enabled for '{self.config.environment.value}' environment.")
+                if self.config.messaging.kafka_bootstrap_servers:
+                    await self._init_kafka_producer()
+            else:
+                logger.info("Kafka is disabled for this environment. SQS will be used as a fallback if available.")
+            
+            if SQS_AVAILABLE: # SQS는 LocalStack을 통해 로컬에서도 사용 가능할 수 있음
                 self._init_sqs_client()
             
             self._initialized = True
             logger.info("Message producer initialized successfully")
             
         except Exception as e:
-            logger.error(f"Failed to initialize message producer: {e}")
+            logger.error("Failed to initialize message producer", error=e, exc_info=True)
             raise MessagingError("Producer initialization failed", system="kafka_sqs")
+    
     
     async def _init_kafka_producer(self):
         """Kafka 프로듀서 초기화"""
         # TODO: 실시간 서비스 변경 - MSK Kafka로 메시지 스트리밍
-        # - bootstrap_servers: 실제 MSK 클러스터 엔드포인트 (e.g., b-1.xxx.kafka.ap-northeast-2.amazonaws.com:9092)
-        # - security_protocol: 'SASL_SSL'로 TLS 암호화 활성화
-        # - sasl_mechanism: 'AWS_MSK_IAM'으로 IAM 인증
-        # AWS MSK 배포 시 수정 필요사항:
-        # 1. MSK 클러스터 생성 (최소 3개 AZ에 브로커 배치)
-        # 2. 클라이언트 인증 방식 설정 (IAM 또는 SASL/SCRAM)
-        # 3. 전송 중 암호화 활성화 (TLS)
-        # 4. VPC 보안 그룹에서 MSK 포트 허용 (9092: PLAINTEXT, 9094: TLS, 9096: SASL_SSL)
-        # 5. IAM 역할에 kafka-cluster:Connect, kafka-cluster:WriteData 권한 추가
-        # 6. 아래 주석 해제하여 MSK 설정 적용:
-        # security_protocol='SASL_SSL',
-        # sasl_mechanism='AWS_MSK_IAM',
-        # sasl_oauth_token_provider=MSKTokenProvider()
+        # ... (기존 주석 및 TODO 내용은 동일)
         try:
             self.kafka_producer = AIOKafkaProducer(
                 bootstrap_servers=self.config.messaging.kafka_bootstrap_servers,
@@ -119,26 +124,38 @@ class MessageProducer:
             
             await self.kafka_producer.start()
             logger.info("Kafka producer initialized",
-                       servers=self.config.messaging.kafka_bootstrap_servers)
+                        servers=self.config.messaging.kafka_bootstrap_servers)
             
         except Exception as e:
-            logger.error(f"Failed to initialize Kafka producer: {e}")
-            self.kafka_producer = None
+            logger.warning("Failed to initialize Kafka producer. It will be disabled.", error=str(e))
+            self.kafka_producer = None # 초기화 실패 시 None으로 설정
     
     def _init_sqs_client(self):
-        """SQS 클라이언트 초기화"""
-        # TODO: 실시간 서비스 변경 - SQS로 폴백 메시징
-        # - sqs_queue_url: 실제 SQS 큐 URL 설정 (e.g., https://sqs.ap-northeast-2.amazonaws.com/123456789012/currency-queue)
-        # - IAM 역할에 sqs:SendMessage, sqs:ReceiveMessage 권한 추가
+        """SQS 클라이언트 초기화 (LocalStack 지원)"""
+        # 필요한 모듈을 이 시점에서 import
+        from shared.config import Environment
+        
         try:
-            self.sqs_client = boto3.client(
-                'sqs',
-                region_name=self.config.messaging.sqs_region
-            )
-            logger.info("SQS client initialized", region=self.config.messaging.sqs_region)
+            client_kwargs = {
+                'region_name': self.config.messaging.sqs_region
+            }
             
+            # --- [핵심 수정] ---
+            # 로컬 환경일 경우 LocalStack 엔드포인트를 사용하도록 설정
+            if self.config.environment == Environment.LOCAL:
+                # docker-compose.yml에 정의된 SQS_ENDPOINT 환경변수 값을 사용
+                # config.py에서 이 값을 self.config.sqs_endpoint 등으로 로드해야 합니다.
+                # 이전 docker-compose.yml을 보면 DYNAMODB_ENDPOINT와 SQS_ENDPOINT가 동일합니다.
+                endpoint_url = getattr(self.config, 'sqs_endpoint', None) or getattr(self.config, 'dynamodb_endpoint', None)
+                if endpoint_url:
+                    client_kwargs['endpoint_url'] = endpoint_url
+            # --- [수정 끝] ---
+            
+            self.sqs_client = boto3.client('sqs', **client_kwargs)
+            logger.info("SQS client initialized", extra=client_kwargs)
+
         except Exception as e:
-            logger.error(f"Failed to initialize SQS client: {e}")
+            logger.warning("Failed to initialize SQS client. It will be disabled.", error=str(e))
             self.sqs_client = None
     
     async def send_message(
@@ -190,13 +207,14 @@ class MessageProducer:
                 return True
                 
             except Exception as e:
-                logger.warning(f"Kafka send failed, trying SQS fallback: {e}")
+                logger.warning("Kafka send failed, trying SQS fallback", error=e, exc_info=True)
         
         # SQS 폴백
-        if self.sqs_client and self.config.messaging.sqs_queue_url:
+        queue_url = self.config.messaging.sqs_queue_urls.get(topic)
+        if self.sqs_client and queue_url:
             try:
                 response = self.sqs_client.send_message(
-                    QueueUrl=self.config.messaging.sqs_queue_url,
+                    QueueUrl=queue_url,
                     MessageBody=json.dumps(enriched_message, default=str),
                     MessageAttributes={
                         'topic': {
@@ -212,21 +230,23 @@ class MessageProducer:
                 
                 logger.debug(
                     "Message sent to SQS",
-                    queue_url=self.config.messaging.sqs_queue_url,
+                    queue_url=queue_url,
                     message_id=response['MessageId']
                 )
                 return True
                 
             except Exception as e:
-                logger.error(f"SQS send also failed: {e}")
+                logger.error("SQS send also failed", error=e, exc_info=True)
         
         # 모든 전송 방법 실패
-        logger.error("All messaging systems failed", topic=topic)
-        raise MessagingError(
-            f"Failed to send message to topic {topic}",
-            system="kafka_sqs",
-            topic=topic
-        )
+        logger.error("All messaging systems failed to send the message", topic=topic)
+        # from .exceptions import MessagingError # 필요 시점에 임포트
+        # raise MessagingError(
+        #     f"Failed to send message to topic {topic}",
+        #     system="kafka_sqs",
+        #     topic=topic
+        # )
+        return False # 실패 시 False 반환으로 변경하여 유연성 확보
     
     async def close(self):
         """프로듀서 종료"""
@@ -247,25 +267,33 @@ class MessageConsumer:
         self.kafka_consumer = None
         self.sqs_client = None
         self._running = False
-    
+        self._initialized = False # 초기화 상태 플래그 추가
+
     async def initialize(self):
         """컨슈머 초기화"""
+        if self._initialized:
+            return
+
+        from shared.config import get_config, Environment
+        from shared.exceptions import MessagingError
+
         try:
             # 설정 로드
             self.config = get_config()
             
             # Kafka 컨슈머 초기화
-            if KAFKA_AVAILABLE and self.config.messaging.kafka_bootstrap_servers:
+            if KAFKA_INSTALLED and self.config.messaging.kafka_bootstrap_servers:
                 await self._init_kafka_consumer()
             
             # SQS 클라이언트 초기화 (AWS 환경에서만)
             if SQS_AVAILABLE and self.config.environment != Environment.LOCAL:
                 self._init_sqs_client()
-            
+
+            self._initialized = True
             logger.info("Message consumer initialized successfully")
             
         except Exception as e:
-            logger.error(f"Failed to initialize message consumer: {e}")
+            logger.error("Failed to initialize message consumer", error=e, exc_info=True)
             raise MessagingError("Consumer initialization failed", system="kafka_sqs")
     
     async def _init_kafka_consumer(self):
@@ -283,23 +311,38 @@ class MessageConsumer:
             
             await self.kafka_consumer.start()
             logger.info("Kafka consumer initialized", 
-                       topics=self.topics, group_id=self.group_id)
+                        topics=self.topics, group_id=self.group_id)
             
         except Exception as e:
-            logger.error(f"Failed to initialize Kafka consumer: {e}")
+            logger.warning("Failed to initialize Kafka consumer", error=str(e))
             self.kafka_consumer = None
     
     def _init_sqs_client(self):
-        """SQS 클라이언트 초기화"""
+        """SQS 클라이언트 초기화 (LocalStack 지원)"""
+        # 필요한 모듈을 이 시점에서 import
+        from shared.config import Environment
+        
         try:
-            self.sqs_client = boto3.client(
-                'sqs',
-                region_name=self.config.messaging.sqs_region
-            )
-            logger.info("SQS client initialized for consumer")
+            client_kwargs = {
+                'region_name': self.config.messaging.sqs_region
+            }
             
+            # --- [핵심 수정] ---
+            # 로컬 환경일 경우 LocalStack 엔드포인트를 사용하도록 설정
+            if self.config.environment == Environment.LOCAL:
+                # docker-compose.yml에 정의된 SQS_ENDPOINT 환경변수 값을 사용
+                # config.py에서 이 값을 self.config.sqs_endpoint 등으로 로드해야 합니다.
+                # 이전 docker-compose.yml을 보면 DYNAMODB_ENDPOINT와 SQS_ENDPOINT가 동일합니다.
+                endpoint_url = getattr(self.config, 'sqs_endpoint', None) or getattr(self.config, 'dynamodb_endpoint', None)
+                if endpoint_url:
+                    client_kwargs['endpoint_url'] = endpoint_url
+            # --- [수정 끝] ---
+            
+            self.sqs_client = boto3.client('sqs', **client_kwargs)
+            logger.info("SQS client initialized", extra=client_kwargs)
+
         except Exception as e:
-            logger.error(f"Failed to initialize SQS client for consumer: {e}")
+            logger.warning("Failed to initialize SQS client. It will be disabled.", error=str(e))
             self.sqs_client = None
     
     async def start_consuming(self, message_handler: Callable[[Dict[str, Any]], None]):
@@ -309,18 +352,21 @@ class MessageConsumer:
         Args:
             message_handler: 메시지 처리 함수
         """
-        if not self.kafka_consumer and not self.sqs_client:
+        if not self._initialized:
             await self.initialize()
         
         self._running = True
         logger.info("Starting message consumption", topics=self.topics)
         
+        from shared.exceptions import MessagingError
+
         # Kafka 소비 우선
         if self.kafka_consumer:
             await self._consume_kafka(message_handler)
         elif self.sqs_client:
             await self._consume_sqs(message_handler)
         else:
+            logger.error("No messaging system available for consumption.")
             raise MessagingError("No messaging system available for consumption")
     
     async def _consume_kafka(self, message_handler: Callable):
@@ -331,7 +377,8 @@ class MessageConsumer:
                     break
                 
                 try:
-                    await message_handler(message.value)
+                    # message_handler가 비동기 함수일 수 있으므로 await 처리
+                    await asyncio.coroutine(message_handler)(message.value)
                     logger.debug(
                         "Message processed from Kafka",
                         topic=message.topic,
@@ -341,15 +388,21 @@ class MessageConsumer:
                     
                 except Exception as e:
                     logger.error(
-                        f"Message processing failed: {e}, topic={message.topic}, message_value={message.value}"
+                        "Message processing failed",
+                        error=e,
+                        topic=message.topic,
+                        message_value=message.value,
+                        exc_info=True
                     )
                     
         except Exception as e:
-            logger.error(f"Kafka consumption error: {e}")
+            logger.error("Kafka consumption error", error=e, exc_info=True)
+            from shared.exceptions import MessagingError
             raise MessagingError("Kafka consumption failed", system="kafka")
     
     async def _consume_sqs(self, message_handler: Callable):
         """SQS 메시지 소비"""
+        from shared.exceptions import MessagingError
         if not self.config.messaging.sqs_queue_url:
             raise MessagingError("SQS queue URL not configured")
         
@@ -364,10 +417,17 @@ class MessageConsumer:
                 
                 messages = response.get('Messages', [])
                 
+                if not messages:
+                    await asyncio.sleep(1) # 메시지가 없을 경우 짧은 대기
+                    continue
+
                 for message in messages:
+                    if not self._running:
+                        break
                     try:
                         message_body = json.loads(message['Body'])
-                        await message_handler(message_body)
+                        # message_handler가 비동기 함수일 수 있으므로 await 처리
+                        await asyncio.coroutine(message_handler)(message_body)
                         
                         # 메시지 삭제
                         self.sqs_client.delete_message(
@@ -376,16 +436,13 @@ class MessageConsumer:
                         )
                         
                         logger.debug("Message processed from SQS", 
-                                   message_id=message['MessageId'])
+                                     message_id=message['MessageId'])
                         
                     except Exception as e:
-                        logger.error(f"SQS message processing failed: {e}")
-                
-                # 짧은 대기
-                await asyncio.sleep(1)
+                        logger.error("SQS message processing failed", error=e, exc_info=True)
                 
         except Exception as e:
-            logger.error(f"SQS consumption error: {e}")
+            logger.error("SQS consumption error", error=e, exc_info=True)
             raise MessagingError("SQS consumption failed", system="sqs")
     
     async def stop(self):
@@ -397,17 +454,21 @@ class MessageConsumer:
             logger.info("Kafka consumer stopped")
 
 
-# 전역 프로듀서 인스턴스
+# 전역 프로듀서 인스턴스 (싱글턴 패턴)
 _message_producer: Optional[MessageProducer] = None
-
+_producer_lock = asyncio.Lock() # 동시성 문제 방지를 위한 Lock
 
 async def get_message_producer() -> MessageProducer:
-    """메시지 프로듀서 인스턴스 반환"""
+    """메시지 프로듀서 인스턴스 반환 (비동기 싱글턴)"""
     global _message_producer
     
     if _message_producer is None:
-        _message_producer = MessageProducer()
-        await _message_producer.initialize()
+        async with _producer_lock:
+            # Lock을 획득한 후 다시 한번 확인 (더블 체크 락킹)
+            if _message_producer is None:
+                producer = MessageProducer()
+                await producer.initialize()
+                _message_producer = producer
     
     return _message_producer
 

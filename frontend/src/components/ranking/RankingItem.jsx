@@ -86,7 +86,16 @@ const Score = styled.div`
 `;
 
 const RankingItem = ({ ranking, position, countryName }) => {
-  const getTrendIcon = () => '—';  // 트렌드 아이콘은 일단 중립으로 고정
+  const getTrendIcon = (trend) => {
+    switch (trend) {
+      case 'up':
+        return '▲';
+      case 'down':
+        return '▼';
+      default:
+        return '—';  // 트렌드 아이콘은 일단 중립으로 고정
+    }
+  };
 
   const getTrendClass = (trend) => {
     switch (trend) {

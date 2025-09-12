@@ -94,8 +94,12 @@ const RankingList = ({ rankings, loading, error, onRefresh }) => {
     );
   }
 
-  // 클릭 수를 기준으로 정렬
-  const sortedRankings = [...rankings.ranking].sort((a, b) => b.selection_count - a.selection_count);
+  // 클릭 수를 기준으로 정렬 (score 또는 selection_count 사용)
+  const sortedRankings = [...rankings.ranking].sort((a, b) => {
+    const scoreA = a.score || a.selection_count || 0;
+    const scoreB = b.score || b.selection_count || 0;
+    return scoreB - scoreA;
+  });
 
   return (
     <RankingContainer>
@@ -104,7 +108,7 @@ const RankingList = ({ rankings, loading, error, onRefresh }) => {
           key={ranking.country_code}
           ranking={{
             countryCode: ranking.country_code,
-            selection_count: ranking.selection_count,
+            selection_count: ranking.score || ranking.selection_count || 0,
           }}
           position={ranking.rank || ranking.position || ranking._rank || ranking.temp_rank || 0}
           countryName={ranking.country_name}

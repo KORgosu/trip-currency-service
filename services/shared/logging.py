@@ -81,25 +81,26 @@ class StructuredLogger:
     """구조화된 로거 클래스"""
     
     def __init__(self, name: str):
+        self.name = name
         self.logger = logging.getLogger(name)
-        self._setup_logger()
-    
+        self._configured = False  # 설정 완료 여부를 확인할 플래그
+
     def _setup_logger(self):
-        """로거 설정"""
+        """실제 로깅이 필요한 시점에 단 한 번만 실행되는 설정 함수"""
+        if self._configured:
+            return
+
+        from shared.config import get_config, Environment
         config = get_config()
         
-        # 로그 레벨 설정
         level = getattr(logging, config.log_level.upper(), logging.INFO)
         self.logger.setLevel(level)
         
-        # 기존 핸들러 제거
-        for handler in self.logger.handlers[:]:
-            self.logger.removeHandler(handler)
+        if self.logger.hasHandlers():
+            self.logger.handlers.clear()
         
-        # 핸들러 생성
         handler = logging.StreamHandler(sys.stdout)
         
-        # 포맷터 설정
         if config.environment == Environment.LOCAL and config.log_format != "json":
             formatter = SimpleFormatter()
         else:
@@ -107,10 +108,14 @@ class StructuredLogger:
         
         handler.setFormatter(formatter)
         self.logger.addHandler(handler)
-        
-        # 중복 로그 방지
         self.logger.propagate = False
-    
+        self._configured = True
+
+    def _log(self, level: int, message: str, exc_info=None, **kwargs):
+        """내부 로그 메서드"""
+        self._setup_logger()
+        self.logger.log(level, message, exc_info=exc_info, extra=kwargs)
+
     def debug(self, message: str, **kwargs):
         """디버그 로그"""
         self._log(logging.DEBUG, message, **kwargs)
@@ -119,32 +124,23 @@ class StructuredLogger:
         """정보 로그"""
         self._log(logging.INFO, message, **kwargs)
     
-    def warning(self, message: str, **kwargs):
+    def warning(self, message: str, error: Optional[Exception] = None, **kwargs):
         """경고 로그"""
-        self._log(logging.WARNING, message, **kwargs)
+        if error:
+            kwargs['error_details'] = str(error)
+        self._log(logging.WARNING, message, exc_info=(error is not None), **kwargs)
     
-    def error(self, message: str, error: Exception = None, **kwargs):
+    def error(self, message: str, error: Optional[Exception] = None, **kwargs):
         """에러 로그"""
         if error:
-            kwargs['error_type'] = type(error).__name__
-            kwargs['error_message'] = str(error)
-            self.logger.error(message, exc_info=error, extra=kwargs)
-        else:
-            self._log(logging.ERROR, message, **kwargs)
+            kwargs['error_details'] = str(error)
+        self._log(logging.ERROR, message, exc_info=(error is not None), **kwargs)
     
-    def critical(self, message: str, error: Exception = None, **kwargs):
+    def critical(self, message: str, error: Optional[Exception] = None, **kwargs):
         """치명적 에러 로그"""
         if error:
-            kwargs['error_type'] = type(error).__name__
-            kwargs['error_message'] = str(error)
-            self.logger.critical(message, exc_info=error, extra=kwargs)
-        else:
-            self._log(logging.CRITICAL, message, **kwargs)
-    
-    def _log(self, level: int, message: str, **kwargs):
-        """내부 로그 메서드"""
-        self.logger.log(level, message, extra=kwargs)
-
+            kwargs['error_details'] = str(error)
+        self._log(logging.CRITICAL, message, exc_info=(error is not None), **kwargs)
 
 # 로거 팩토리
 _loggers: Dict[str, StructuredLogger] = {}

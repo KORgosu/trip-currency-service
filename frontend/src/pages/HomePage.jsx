@@ -142,9 +142,12 @@ const ContentColumn = styled.div`
 
 const HomePage = () => {
   const { country, loading, error, refreshLocation } = useGeolocation();
-  const { rankings, loading: rankingLoading, error: rankingError, fetchRankings, recordUserSelection, recordMultipleSelections } = useRankingData();
+  const { rankings, loading: rankingLoading, error: rankingError, fetchRankings } = useRankingData();
 
-  // 초기 로딩은 useRankingData 훅 내부 setTimeout(fetch) 로 처리 (중복 호출 방지)
+  // 컴포넌트 마운트 시 랭킹 데이터 로드
+  useEffect(() => {
+    fetchRankings('daily', 10, 0);
+  }, [fetchRankings]);
 
   return (
     <HomeContainer>
@@ -163,11 +166,7 @@ const HomePage = () => {
         <MainContentSection>
           <ContentColumn>
             <SearchSection>
-              <CountrySelector 
-                recordSelection={recordUserSelection}
-                recordMultipleSelections={recordMultipleSelections}
-                refreshRanking={() => fetchRankings('daily', 10, 0)}
-              />
+              <CountrySelector />
             </SearchSection>
             
             <RankingSection>

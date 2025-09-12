@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import styled from 'styled-components';
+import useRankingData from '../../hooks/useRankingData';
 
 const SelectorContainer = styled.div`
   display: flex;
@@ -56,12 +57,6 @@ const SearchButton = styled.button`
   
   &:hover {
     background-color: #5a6fd8;
-  }
-
-  &:disabled {
-    background-color: #bfc8ff;
-    cursor: not-allowed;
-    opacity: 0.8;
   }
   
   @media (max-width: 480px) {
@@ -158,21 +153,17 @@ const CountryFlag = styled.span`
   font-size: 1.2rem;
 `;
 
-// props:
-// recordSelection(countryCode)
-// recordMultipleSelections(countryCodes[])
-// refreshRanking()
-const CountrySelector = ({ recordSelection, recordMultipleSelections, refreshRanking }) => {
+const CountrySelector = () => {
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedCountries, setSelectedCountries] = useState([]);
+  const [selectedCountries, setSelectedCountries] = useState(['US', 'JP', 'GB']);
   const [showList, setShowList] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
   const [clickedItem, setClickedItem] = useState(null);
-  const [isRecording, setIsRecording] = useState(false);
   const inputRef = useRef(null);
   const listRef = useRef(null);
   const navigate = useNavigate();
+  const { recordUserSelection, recordMultipleSelections } = useRankingData();
 
   // 확장된 국가 데이터
   const countries = [
@@ -272,7 +263,8 @@ const CountrySelector = ({ recordSelection, recordMultipleSelections, refreshRan
       
       setSelectedCountries([...selectedCountries, country.code]);
       
-  // 개별 선택 즉시 Optimistic 카운트 (실제 기록은 검색에서 배치 처리) - 필요 시 recordSelection 호출 가능
+      // 국가 선택 시에는 클릭수 기록하지 않음 (검색 시에만 기록)
+      console.log(`국가 선택됨: ${country.name} (${country.code}) - 클릭수 기록은 검색 시에만`);
     }
     setSearchTerm('');
     setShowList(false);
@@ -290,36 +282,19 @@ const CountrySelector = ({ recordSelection, recordMultipleSelections, refreshRan
 
   // 검색 실행 함수
   const handleSearch = async () => {
-    // 재진입 방지 (Enter 키와 버튼 중복 등)
-    if (isRecording) {
-      return;
-    }
     if (selectedCountries.length === 0) {
       alert('비교할 국가를 최소 1개 이상 선택해주세요.');
       return;
     }
-
-    // 선택된 국가들 카운트 배치 기록
-    setIsRecording(true);
+    
+    // 검색 시 선택된 모든 국가들을 랭킹 서비스에 기록 (배치 처리)
     try {
-      if (recordMultipleSelections) {
-        await recordMultipleSelections(selectedCountries, 'anonymous');
-      } else if (recordSelection) {
-        for (const code of selectedCountries) {
-          await recordSelection(code);
-        }
-      }
-      // 기록 후 랭킹 새로고침
-      if (refreshRanking) {
-        await refreshRanking();
-      }
-    } catch (err) {
-      // 기록 실패는 네비게이션을 막지 않음; 로그만 남김
-      console.error('선택 국가 클릭 기록 중 오류:', err);
-    } finally {
-      setIsRecording(false);
+      await recordMultipleSelections(selectedCountries, 'anonymous');
+      console.log(`검색 시 모든 국가 선택 기록 완료:`, selectedCountries);
+    } catch (error) {
+      console.error('검색 시 국가 선택 기록 실패:', error);
     }
-
+    
     // 선택된 국가들을 URL 파라미터로 전달
     const countriesParam = selectedCountries.join(',');
     navigate(`/comparison?countries=${countriesParam}`);
@@ -330,10 +305,7 @@ const CountrySelector = ({ recordSelection, recordMultipleSelections, refreshRan
     if (e.key === 'Enter' && !showList) {
       // 드롭다운이 열려있지 않을 때 Enter키를 누르면 검색 실행
       e.preventDefault();
-      // 버튼 disabled 상태와 동일하게 재진입 체크
-      if (!isRecording) {
-        handleSearch();
-      }
+      handleSearch();
       return;
     }
 
@@ -427,8 +399,8 @@ const CountrySelector = ({ recordSelection, recordMultipleSelections, refreshRan
           )}
         </DropdownContainer>
         
-        <SearchButton onClick={handleSearch} title="선택된 국가들 비교하기" disabled={isRecording}>
-          {isRecording ? '⏳' : '🔍'}
+        <SearchButton onClick={handleSearch} title="선택된 국가들 비교하기">
+          🔍
         </SearchButton>
       </SearchContainer>
 

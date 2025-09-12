@@ -33,7 +33,6 @@ from shared.utils import SecurityUtils, ValidationUtils
 
 from app.services.selection_recorder import SelectionRecorder
 from app.services.ranking_provider import RankingProvider
-from shared.database import RedisHelper
 
 # 로거 초기화
 logger = logging.getLogger(__name__)
@@ -92,13 +91,24 @@ app = FastAPI(
 )
 
 # CORS 설정
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # 개발 환경에서는 모든 origin 허용
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+config = get_config() if 'config' in globals() else None
+if config and config.cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=config.cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    # 개발 환경에서는 모든 origin 허용
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 
 # 의존성 함수들
@@ -216,6 +226,7 @@ async def options_handler(path: str):
     """CORS preflight 요청 처리"""
     return {"message": "OK"}
 
+
 # API 엔드포인트들
 @app.get("/health")
 async def health_check():
@@ -307,6 +318,7 @@ async def get_rankings(
 async def debug_counters():
     """디버그용: Redis count:total:* / 오늘 일별 키 값 조회"""
     try:
+        from shared.database import RedisHelper
         r = RedisHelper()
         total_keys = await r.client.keys("count:total:*")
         today = time.strftime('%Y-%m-%d')

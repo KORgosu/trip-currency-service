@@ -1,7 +1,7 @@
 // API 서비스 레이어
-const API_BASE_URL = process.env.VITE_API_BASE_URL || 'http://localhost:8001';
-const RANKING_API_BASE_URL = process.env.VITE_RANKING_API_BASE_URL || 'http://localhost:8002';
-const HISTORY_API_BASE_URL = process.env.VITE_HISTORY_API_BASE_URL || 'http://localhost:8003';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8001';
+const RANKING_API_BASE_URL = import.meta.env.VITE_RANKING_API_BASE_URL || 'http://localhost:8002';
+const HISTORY_API_BASE_URL = import.meta.env.VITE_HISTORY_API_BASE_URL || 'http://localhost:8003';
 
 class ApiService {
   constructor() {
@@ -65,6 +65,8 @@ class ApiService {
       headers: {
         'Content-Type': 'application/json',
         'X-Correlation-ID': this.generateCorrelationId(),
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
       },
     };
 
@@ -78,13 +80,17 @@ class ApiService {
     };
 
     try {
+      console.log(`[Ranking API] 요청: ${url}`, config);
       const response = await fetch(url, config);
       
       if (!response.ok) {
+        console.error(`[Ranking API] HTTP 에러: ${response.status} ${response.statusText}`);
         throw new Error(`HTTP error! status: ${response.status}`);
       }
       
       const data = await response.json();
+      console.log(`[Ranking API] 성공 응답:`, data);
+      
       // Accept multiple response shapes from the ranking service:
       // - raw array: [ { country, count } ]
       // - wrapped: { success: true, data: { ranking: [...] } }
@@ -101,13 +107,8 @@ class ApiService {
     } catch (error) {
       console.error('랭킹 API 요청 실패:', error);
       
-      // 랭킹 서비스가 실행되지 않을 때 Mock 데이터 반환
-      if (error.message.includes('Failed to fetch') || error.message.includes('ERR_CONNECTION_REFUSED')) {
-        console.warn('랭킹 서비스가 실행되지 않음. Mock 데이터를 사용합니다.');
-        return this.getRankingMockData(endpoint);
-      }
-      
-      throw error;
+      // 개발 환경에서는 목업 데이터 사용 안 함 - 실제 에러를 보여줌
+      throw error; // 목업 데이터 폴백 완전 제거
     }
   }
 
@@ -214,36 +215,10 @@ class ApiService {
     };
   }
 
-  // 랭킹 서비스 Mock 데이터 반환
+  // 랭킹 서비스 Mock 데이터 반환 (완전 비활성화)
   getRankingMockData(endpoint) {
-    if (endpoint.includes('/rankings')) {
-      return {
-        success: true,
-        data: {
-          period: 'daily',
-          total_selections: 1250,
-          last_updated: new Date().toISOString(),
-          ranking: [
-            { country_code: 'JP', country_name: '일본', selection_count: 245, rank: 1 },
-            { country_code: 'US', country_name: '미국', selection_count: 198, rank: 2 },
-            { country_code: 'TH', country_name: '태국', selection_count: 156, rank: 3 },
-            { country_code: 'VN', country_name: '베트남', selection_count: 134, rank: 4 },
-            { country_code: 'SG', country_name: '싱가포르', selection_count: 98, rank: 5 },
-            { country_code: 'CN', country_name: '중국', selection_count: 87, rank: 6 },
-            { country_code: 'GB', country_name: '영국', selection_count: 76, rank: 7 },
-            { country_code: 'AU', country_name: '호주', selection_count: 65, rank: 8 },
-            { country_code: 'CA', country_name: '캐나다', selection_count: 54, rank: 9 },
-            { country_code: 'DE', country_name: '독일', selection_count: 43, rank: 10 }
-          ]
-        }
-      };
-    }
-    
-    // 기본 랭킹 Mock 응답
-    return {
-      success: true,
-      data: { message: 'Mock ranking data - 랭킹 서비스가 실행되지 않음' }
-    };
+    console.warn('[API] 목업 데이터가 호출되었습니다. 실제 서비스 연결을 확인하세요.');
+    throw new Error('목업 데이터 사용 금지 - 실제 랭킹 서비스에 연결하세요.');
   }
 
   // History Service Mock 데이터 반환
@@ -300,7 +275,7 @@ class ApiService {
     };
     
     const baseRate = baseRates[currency] || 1000.0;
-    const days = period === '1w' ? 7 : period === '1m' ? 30 : 180;
+    const days = period === '1w' ? 7 : period === '1m' ? 30 : period === '3m' ? 90 : 180;
     
     const results = [];
     let currentRate = baseRate;
@@ -384,20 +359,62 @@ class ApiService {
     };
 
     try {
-      // Get rankings from our FastAPI backend
-  const nocache = Date.now();
-  const resp = await this.rankingRequest(`/api/v1/rankings?period=${period}&limit=${limit}&offset=${offset}&_=${nocache}`);
-      const data = resp.data || resp;
-      const items = data.ranking || [];
+      // Get rankings from our FastAPI backend with strong cache busting
+      const url = `/api/v1/rankings?period=${period}&_=${Date.now()}`;
+      
+      console.log('[getRankings] 요청 URL:', `${this.rankingBaseURL}${url}`);
+      
+      const resp = await this.rankingRequest(url);
+      console.log('[getRankings] rankingRequest 결과:', resp);
+      
+      // 데이터 추출 로직 개선
+      let data, items;
+      
+      if (resp.success && resp.data) {
+        // 표준 응답: { success: true, data: { ranking: [...] } }
+        data = resp.data;
+        items = data.ranking || [];
+        
+        // 직접 API 호출 결과와 같은 구조 확인
+        console.log('[getRankings] data.ranking:', data.ranking);
+        console.log('[getRankings] data.ranking 타입:', typeof data.ranking);
+        console.log('[getRankings] data.ranking 길이:', Array.isArray(data.ranking) ? data.ranking.length : 'Not Array');
+        
+      } else if (resp.data && resp.data.ranking) {
+        // 중첩 응답: { data: { ranking: [...] } }
+        data = resp.data;
+        items = data.ranking || [];
+      } else if (Array.isArray(resp.ranking)) {
+        // 직접 응답: { ranking: [...] }
+        data = resp;
+        items = resp.ranking || [];
+      } else if (Array.isArray(resp)) {
+        // 배열 응답: [...]
+        data = { ranking: resp };
+        items = resp;
+      } else {
+        // 예외 처리
+        console.warn('[getRankings] 예상치 못한 응답 구조:', resp);
+        data = { ranking: [] };
+        items = [];
+      }
+      
+      console.log('[getRankings] 추출된 data:', data);
+      console.log('[getRankings] 추출된 items:', items);
+      console.log('[getRankings] items 길이:', items.length);
+      console.log('[getRankings] items 상세:', JSON.stringify(items, null, 2));
+      
       // 1) 기본 정규화 (서버 rank 보존)
       let rankingItems = items
-        .filter(it => (it.score || it.selection_count || 0) > 0)
         .map(it => ({
           country_code: it.country_code,
-            country_name: it.country_name,
-            selection_count: it.score ?? it.selection_count ?? 0,
-            rank: it.rank // 서버에서 온 rank (dense)
-        }));
+          country_name: it.country_name,
+          selection_count: it.score ?? it.selection_count ?? 0,
+          rank: it.rank // 서버에서 온 rank (dense)
+        }))
+        .filter(it => it.selection_count > 0); // 필터링을 나중에 수행
+
+      console.log('[getRankings] 정규화된 rankingItems:', rankingItems);
 
       // 2) 점수 순으로 정렬 (표시 일관성)
       rankingItems.sort((a,b)=> b.selection_count - a.selection_count);
@@ -439,25 +456,10 @@ class ApiService {
     };
 
     try {
-      const response = await fetch(`${this.rankingBaseURL}/api/v1/rankings/selections`, {
+      return await this.rankingRequest('/api/v1/rankings/selections', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Correlation-ID': this.generateCorrelationId(),
-        },
         body: JSON.stringify(payload)
       });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      
-      const data = await response.json();
-      if (!data.success) {
-        throw new Error(data.error?.message || '선택 기록 실패');
-      }
-
-      return data;
     } catch (error) {
       console.error('선택 기록 실패:', error);
       // 에러를 상위로 전파하여 처리
