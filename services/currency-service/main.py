@@ -88,6 +88,9 @@ async def lifespan(app: FastAPI):
         logger.info("Currency Service stopped")
 
 
+# 설정을 미리 초기화하여 CORS 미들웨어에서 사용 가능하게 함
+config = init_config("currency-service")
+
 # FastAPI 앱 생성
 app = FastAPI(
     title="Currency Service",
@@ -97,7 +100,6 @@ app = FastAPI(
 )
 
 # CORS 설정
-config = get_config() if 'config' in globals() else None
 if config and config.cors_origins:
     app.add_middleware(
         CORSMiddleware,
