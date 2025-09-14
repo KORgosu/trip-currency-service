@@ -4,6 +4,7 @@ import styled from 'styled-components';
 import ExchangeRateChart from '../components/country/ExchangeRateChart';
 import CountryCard from '../components/country/CountryCard';
 import useCurrencyData from '../hooks/useCurrencyData';
+import apiService from '../services/api';
 
 const ComparisonContainer = styled.div`
   max-width: 1200px;
@@ -170,6 +171,24 @@ const ComparisonPage = () => {
       setSelectedCountries(['US', 'JP', 'GB', 'CN']);
     }
   }, [searchParams]);
+
+  // 페이지 진입 시 선택된 국가들의 점수 1씩 증가
+  useEffect(() => {
+    const updateCounts = async () => {
+      if (!selectedCountries || selectedCountries.length === 0) return;
+      try {
+        await apiService.rankingRequest('/api/v1/rankings/update', {
+          method: 'POST',
+          body: JSON.stringify({ countries: selectedCountries })
+        });
+      } catch (e) {
+        // 비치명적: 로그만 남김
+        console.warn('랭킹 카운트 업데이트 실패:', e?.message || e);
+      }
+    };
+    updateCounts();
+    // selectedCountries가 결정될 때만 수행
+  }, [selectedCountries]);
 
   const handleBackToHome = () => {
     navigate('/');
