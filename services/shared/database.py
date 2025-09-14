@@ -5,6 +5,7 @@ Aurora MySQL, Redis, DynamoDB 지원
 import asyncio
 import json
 from typing import Dict, List, Any, Optional, Union
+from decimal import Decimal
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 import aiomysql
@@ -226,25 +227,29 @@ class DatabaseManager:
         # - region_name = 'ap-northeast-2' 등 실제 리전 설정
         # - AWS 자격증명 설정 (IAM 역할)
         try:
+            # 컨테이너 내부에서는 localhost가 아닌 서비스 이름(localstack)으로 접근해야 함
+            endpoint = self.config.dynamodb_endpoint or 'http://localstack:4566'
+            region = self.config.database.dynamodb_region or 'us-east-1'
+
             # LocalStack DynamoDB 연결 (4566 포트)
             self._dynamodb_resource = boto3.resource(
                 'dynamodb',
-                endpoint_url='http://localhost:4566',  # LocalStack 포트
-                region_name='us-east-1',
+                endpoint_url=endpoint,
+                region_name=region,
                 aws_access_key_id='dummy',
                 aws_secret_access_key='dummy'
             )
-            
+
             self._dynamodb_client = boto3.client(
                 'dynamodb',
-                endpoint_url='http://localhost:4566',  # LocalStack 포트
-                region_name='us-east-1',
+                endpoint_url=endpoint,
+                region_name=region,
                 aws_access_key_id='dummy',
                 aws_secret_access_key='dummy'
             )
-            
+
             logger.info("DynamoDB Local (LocalStack) connection established")
-            
+
         except Exception as e:
             logger.error("Failed to initialize DynamoDB Local connection", error=e)
             # 로컬에서는 DynamoDB 없이도 동작하도록 허용
@@ -412,6 +417,23 @@ class RedisHelper:
         except Exception as e:
             logger.warning(f"Redis delete failed: {e}")
             return 0
+
+    async def delete_pattern(self, pattern: str) -> int:
+        """패턴에 매칭되는 키들을 삭제 (SCAN 기반)"""
+        if not self.client:
+            return 0
+        try:
+            deleted = 0
+            # scan_iter는 비차단 스캔으로, 대규모 키에서도 안전
+            async for key in self.client.scan_iter(match=pattern):
+                try:
+                    deleted += await self.client.delete(key)
+                except Exception as inner:
+                    logger.warning(f"Redis delete for key {key} failed: {inner}")
+            return deleted
+        except Exception as e:
+            logger.warning(f"Redis delete_pattern failed: {e}")
+            return 0
     
     async def exists(self, key: str) -> bool:
         """키 존재 여부 확인"""
@@ -477,13 +499,26 @@ class DynamoDBHelper:
     def __init__(self, table_name: str):
         self.table = get_dynamodb_table(table_name)
         self.table_name = table_name
+
+    def _to_dynamodb_compatible(self, value: Any) -> Any:
+        """DynamoDB에 저장 가능한 형태로 변환 (float -> Decimal 등)"""
+        if isinstance(value, float):
+            # 부동소수는 문자열을 통해 Decimal로 변환하여 정확도 유지
+            return Decimal(str(value))
+        if isinstance(value, dict):
+            return {k: self._to_dynamodb_compatible(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [self._to_dynamodb_compatible(v) for v in value]
+        return value
     
     async def put_item(self, item: Dict[str, Any]):
         """아이템 저장"""
         try:
             # DynamoDB는 동기 작업이므로 스레드 풀에서 실행
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, self.table.put_item, {'Item': item})
+            # kwargs로 전달되도록 람다 사용 (boto3는 키워드 인수 필요)
+            converted = self._to_dynamodb_compatible(item)
+            await loop.run_in_executor(None, lambda: self.table.put_item(Item=converted))
         except ClientError as e:
             logger.error(f"Failed to put item to {self.table_name}", error=e)
             raise
@@ -514,4 +549,17 @@ class DynamoDBHelper:
             return response.get('Items', [])
         except ClientError as e:
             logger.error(f"Failed to query {self.table_name}", error=e)
+            raise
+
+    async def scan(self, **kwargs) -> List[Dict[str, Any]]:
+        """테이블 스캔"""
+        try:
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: self.table.scan(**kwargs)
+            )
+            return response.get('Items', [])
+        except ClientError as e:
+            logger.error(f"Failed to scan {self.table_name}", error=e)
             raise

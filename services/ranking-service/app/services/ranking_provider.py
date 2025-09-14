@@ -175,34 +175,21 @@ class RankingProvider:
     async def _get_ranking_from_dynamodb(self, period: str) -> Dict[str, Any]:
         """DynamoDB에서 랭킹 데이터 조회"""
         try:
-            # DynamoDB에서 최신 랭킹 결과 조회 (Query 사용)
-            # 파티션 키만 사용하여 가장 최근 계산된 랭킹 조회
+            # DynamoDB에서 period 키로 직접 조회
             try:
-                from boto3.dynamodb.conditions import Key
-                table = self.dynamodb_helper.table
-                
-                response = table.query(
-                    KeyConditionExpression=Key('ranking_period').eq(period),
-                    ScanIndexForward=False,  # 내림차순 정렬 (가장 최근)
-                    Limit=1
-                )
-                
-                items = response.get('Items', [])
-                if items:
-                    result = items[0]
+                item = await self.dynamodb_helper.get_item({"period": period})
+                if item:
                     return {
-                        "period": result["ranking_period"],
-                        "total_selections": result.get("total_selections", 0),
-                        "last_updated": result.get("calculated_at", ""),
-                        "ranking": result.get("ranking_data", [])
+                        "period": item.get("period", period),
+                        "total_selections": item.get("total_selections", 0),
+                        "last_updated": item.get("last_updated", ""),
+                        "ranking": item.get("ranking_data", [])
                     }
-                else:
-                    # 랭킹 데이터가 없으면 모의 데이터 생성
-                    logger.info(f"No ranking data found for {period}, generating mock ranking")
-                    return await self._generate_mock_ranking(period)
-                    
+                # 랭킹 데이터가 없으면 모의 데이터 생성
+                logger.info(f"No ranking data found for {period}, generating mock ranking")
+                return await self._generate_mock_ranking(period)
             except Exception as e:
-                logger.warning(f"DynamoDB query failed: {e}, using mock data")
+                logger.warning(f"DynamoDB get_item failed: {e}, using mock data")
                 return await self._generate_mock_ranking(period)
                 
         except Exception as e:
@@ -244,10 +231,8 @@ class RankingProvider:
                     "previous_rank": i + 1
                 })
             
-            # 점수순으로 정렬
+            # 점수순으로 정렬 (모의 데이터는 단순 순위 부여)
             ranking_items.sort(key=lambda x: x["score"], reverse=True)
-            
-            # 순위 재조정
             for i, item in enumerate(ranking_items):
                 item["rank"] = i + 1
             

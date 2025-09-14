@@ -15,7 +15,7 @@ from fastapi import FastAPI, HTTPException, Query, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import uvicorn
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 from shared.config import init_config, get_config
 from shared.database import init_database, get_db_manager
@@ -33,6 +33,10 @@ from shared.utils import SecurityUtils, ValidationUtils
 
 from app.services.selection_recorder import SelectionRecorder
 from app.services.ranking_provider import RankingProvider
+from shared.database import DynamoDBHelper
+from pydantic import BaseModel, Field
+from shared.database import RedisHelper
+from datetime import datetime, timedelta
 
 # 로거 초기화
 logger = logging.getLogger(__name__)
@@ -82,6 +86,9 @@ async def lifespan(app: FastAPI):
         logger.info("Ranking Service stopped")
 
 
+# 설정을 미리 초기화하여 CORS 미들웨어에서 사용 가능하게 함
+config = init_config("ranking-service")
+
 # FastAPI 앱 생성
 app = FastAPI(
     title="Ranking Service",
@@ -91,7 +98,6 @@ app = FastAPI(
 )
 
 # CORS 설정
-config = get_config() if 'config' in globals() else None
 if config and config.cors_origins:
     app.add_middleware(
         CORSMiddleware,
@@ -288,6 +294,21 @@ async def get_rankings(
         
         # 랭킹 데이터 조회
         ranking_data = await provider.get_rankings(period, limit, offset)
+
+        # 프론트 호환성: selection_count alias 및 rank 보정
+        items = ranking_data.get("ranking", [])
+        normalized = []
+        for idx, it in enumerate(items):
+            if not isinstance(it, dict):
+                normalized.append(it)
+                continue
+            item = dict(it)
+            if "selection_count" not in item and "score" in item:
+                item["selection_count"] = item["score"]
+            if "rank" not in item:
+                item["rank"] = (idx + 1) + (ranking_data.get("pagination", {}).get("items_per_page") and 0 or 0)
+            normalized.append(item)
+        ranking_data["ranking"] = normalized
         
         return RankingResponse(data=ranking_data)
         
@@ -361,6 +382,317 @@ async def trigger_ranking_calculation(
     except Exception as e:
         logger.error(f"Failed to trigger ranking calculation: {e}")
         raise HTTPException(status_code=500, detail="Failed to trigger ranking calculation")
+
+
+# ----- Ranking store read/write APIs (DynamoDB: RankingResults) -----
+
+class RankingStoreItem(BaseModel):
+    period: str = Field(..., description="랭킹 기간 키 (daily|weekly|monthly)")
+    ranking: List[Dict[str, Any]] = Field(default_factory=list)
+    total_selections: int = 0
+    last_updated: Optional[str] = None
+    calculation_metadata: Optional[Dict[str, Any]] = None
+    ttl: Optional[int] = Field(None, description="TTL epoch seconds (optional)")
+
+
+def get_rankings_table_helper() -> DynamoDBHelper:
+    try:
+        return DynamoDBHelper("RankingResults")
+    except Exception as e:
+        logger.error(f"DynamoDB not initialized: {e}")
+        raise HTTPException(status_code=503, detail="DynamoDB not initialized")
+
+
+@app.post("/api/v1/rankings/store", response_model=SuccessResponse)
+async def upsert_ranking_item(payload: RankingStoreItem):
+    """랭킹 결과 저장/업데이트 (DynamoDB)"""
+    try:
+        # 기본 last_updated
+        if not payload.last_updated:
+            from datetime import datetime
+            payload.last_updated = datetime.utcnow().isoformat() + 'Z'
+
+        item = {
+            "period": payload.period,
+            "ranking_data": payload.ranking,
+            "total_selections": payload.total_selections,
+            "last_updated": payload.last_updated,
+        }
+        if payload.calculation_metadata is not None:
+            item["calculation_metadata"] = payload.calculation_metadata
+        if payload.ttl is not None:
+            item["ttl"] = payload.ttl
+
+        helper = get_rankings_table_helper()
+        await helper.put_item(item)
+
+        # 캐시 무효화: 저장된 period의 랭킹 캐시 제거
+        try:
+            redis = RedisHelper()
+            await redis.delete_pattern(f"ranking:{payload.period}:*")
+        except Exception:
+            pass
+
+        return SuccessResponse(data={"message": "Ranking item upserted", "period": payload.period})
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to upsert ranking item: {e}")
+        raise HTTPException(status_code=500, detail="Failed to upsert ranking item")
+
+
+@app.get("/api/v1/rankings/store/{period}", response_model=SuccessResponse)
+async def get_ranking_item(period: str):
+    """특정 기간의 랭킹 결과 조회 (DynamoDB)"""
+    try:
+        helper = get_rankings_table_helper()
+        item = await helper.get_item({"period": period})
+        if not item:
+            raise HTTPException(status_code=404, detail="Ranking item not found")
+
+        # 호환되는 응답 구조로 반환
+        raw_items = item.get("ranking_data", [])
+        normalized = []
+        for idx, it in enumerate(raw_items):
+            if isinstance(it, dict):
+                obj = dict(it)
+                if "selection_count" not in obj and "score" in obj:
+                    obj["selection_count"] = obj["score"]
+                if "rank" not in obj:
+                    obj["rank"] = idx + 1
+                normalized.append(obj)
+            else:
+                normalized.append(it)
+
+        data = {
+            "period": item.get("period", period),
+            "total_selections": item.get("total_selections", 0),
+            "last_updated": item.get("last_updated"),
+            "ranking": normalized,
+            "calculation_metadata": item.get("calculation_metadata")
+        }
+        return SuccessResponse(data=data)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get ranking item: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve ranking item")
+
+
+@app.get("/api/v1/rankings/store", response_model=SuccessResponse)
+async def list_ranking_items():
+    """저장된 랭킹 키 목록 조회 (DynamoDB)"""
+    try:
+        helper = get_rankings_table_helper()
+        items = await helper.scan(ProjectionExpression="#p, last_updated",
+                                  ExpressionAttributeNames={"#p": "period"})
+        periods = [
+            {"period": it.get("period"), "last_updated": it.get("last_updated")}
+            for it in items
+        ]
+        return SuccessResponse(data={"items": periods, "count": len(periods)})
+    except Exception as e:
+        logger.error(f"Failed to list ranking items: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list ranking items")
+
+
+# ----- Increment scores for selected countries (page entry) -----
+class UpdateRankingRequest(BaseModel):
+    countries: List[str] = Field(..., description="선택된 국가 코드 리스트 (예: ['US','JP'])")
+    period: Optional[str] = Field('daily', description="업데이트할 랭킹 기간 (기본: daily)")
+
+
+@app.post("/api/v1/rankings/update", response_model=SuccessResponse)
+async def update_ranking_counts(payload: UpdateRankingRequest):
+    """선택된 나라들의 점수를 1씩 증가
+
+    동작:
+    - 우선 DynamoDB의 RankingResults[{period}]가 있으면 해당 문서의 ranking_data를 수정 후 저장
+    - 문서가 없거나 DynamoDB 사용 불가하면 Redis 카운터를 증가 (기존 fallback)
+    """
+    try:
+        period = (payload.period or 'daily').lower()
+
+        # 1) 시도: DynamoDB 문서 업데이트
+        try:
+            helper = get_rankings_table_helper()
+            item = await helper.get_item({"period": period})
+            if item:
+                now_iso = datetime.utcnow().isoformat() + 'Z'
+                ranking_list = list(item.get("ranking_data", []))
+
+                # 인덱스 맵 구성
+                index_by_code = {}
+                for idx, entry in enumerate(ranking_list):
+                    if isinstance(entry, dict) and 'country_code' in entry:
+                        index_by_code[str(entry['country_code']).upper()] = idx
+
+                # 스코어 증가 또는 신규 추가
+                for code in payload.countries:
+                    cc = str(code).upper().strip()
+                    if not cc:
+                        continue
+                    if cc in index_by_code:
+                        entry = dict(ranking_list[index_by_code[cc]])
+                        entry['score'] = int(entry.get('score', 0)) + 1
+                        # selection_count 필드가 있으면 함께 증가
+                        if 'selection_count' in entry:
+                            entry['selection_count'] = int(entry['selection_count']) + 1
+                        ranking_list[index_by_code[cc]] = entry
+                    else:
+                        # 간단 기본값으로 신규 엔트리 생성
+                        ranking_list.append({
+                            'rank': None,
+                            'country_code': cc,
+                            'country_name': cc,
+                            'score': 1,
+                            'percentage': 0,
+                            'change': 'SAME',
+                            'change_value': 0,
+                            'previous_rank': None
+                        })
+
+                # 정렬 및 순위 재계산 (동점은 동일 순위)
+                ranking_list.sort(key=lambda x: int(x.get('score', 0)), reverse=True)
+                total = sum(int(x.get('score', 0)) for x in ranking_list) or 0
+                last_score = None
+                last_rank = 0
+                for idx, entry in enumerate(ranking_list, start=1):
+                    score = int(entry.get('score', 0))
+                    if last_score is None or score != last_score:
+                        entry['rank'] = idx
+                        last_rank = idx
+                        last_score = score
+                    else:
+                        entry['rank'] = last_rank
+                    if total > 0:
+                        try:
+                            entry['percentage'] = round((score / total) * 100, 2)
+                        except Exception:
+                            entry['percentage'] = 0
+
+                # 문서 업데이트
+                item['ranking_data'] = ranking_list
+                item['total_selections'] = total
+                item['last_updated'] = now_iso
+                await helper.put_item(item)
+
+                # 캐시 무효화: 해당 period의 랭킹 캐시 제거
+                try:
+                    redis = RedisHelper()
+                    await redis.delete_pattern(f"ranking:{period}:*")
+                except Exception as _:
+                    pass
+
+                return SuccessResponse(data={
+                    "updated_countries": [str(c).upper().strip() for c in payload.countries if str(c).strip()],
+                    "count": len([c for c in payload.countries if str(c).strip()]),
+                    "period": period,
+                    "source": "dynamodb"
+                })
+            else:
+                # 문서가 없으면 자동 생성하여 DynamoDB를 소스로 사용
+                now_iso = datetime.utcnow().isoformat() + 'Z'
+                ranking_list = []
+
+                # 신규 엔트리 생성 (각 국가 score=1)
+                for code in payload.countries:
+                    cc = str(code).upper().strip()
+                    if not cc:
+                        continue
+                    ranking_list.append({
+                        'rank': None,
+                        'country_code': cc,
+                        'country_name': cc,
+                        'score': 1,
+                        'percentage': 0,
+                        'change': 'SAME',
+                        'change_value': 0,
+                        'previous_rank': None
+                    })
+
+                # 정렬 및 순위/퍼센트 계산 (동점은 동일 순위)
+                ranking_list.sort(key=lambda x: int(x.get('score', 0)), reverse=True)
+                total = sum(int(x.get('score', 0)) for x in ranking_list) or 0
+                last_score = None
+                last_rank = 0
+                for idx, entry in enumerate(ranking_list, start=1):
+                    score = int(entry.get('score', 0))
+                    if last_score is None or score != last_score:
+                        entry['rank'] = idx
+                        last_rank = idx
+                        last_score = score
+                    else:
+                        entry['rank'] = last_rank
+                    if total > 0:
+                        try:
+                            entry['percentage'] = round((score / total) * 100, 2)
+                        except Exception:
+                            entry['percentage'] = 0
+
+                new_item = {
+                    'period': period,
+                    'ranking_data': ranking_list,
+                    'total_selections': total,
+                    'last_updated': now_iso
+                }
+
+                await helper.put_item(new_item)
+
+                return SuccessResponse(data={
+                    "updated_countries": [str(c).upper().strip() for c in payload.countries if str(c).strip()],
+                    "count": len([c for c in payload.countries if str(c).strip()]),
+                    "period": period,
+                    "source": "dynamodb-created"
+                })
+        except HTTPException:
+            # get_rankings_table_helper가 실패한 경우 등은 Redis 폴백으로 진행
+            pass
+        except Exception as e:
+            logger.warning(f"DynamoDB update path failed, falling back to Redis: {e}")
+
+        # 2) 폴백: Redis 카운터 증가
+        redis = RedisHelper()
+        if not redis.client:
+            # Redis도 없으면 서비스 불가
+            raise HTTPException(status_code=503, detail="Datastore not available (DynamoDB/Redis)")
+
+        today = datetime.utcnow().strftime('%Y-%m-%d')
+        hour = datetime.utcnow().strftime('%Y-%m-%d-%H')
+
+        updated = []
+        for code in payload.countries:
+            country_code = str(code).upper().strip()
+            if not country_code:
+                continue
+            try:
+                daily_key = f"daily_count:{today}:{country_code}"
+                await redis.client.incr(daily_key)
+                await redis.client.expire(daily_key, 86400 * 7)
+
+                total_daily_key = f"daily_total:{today}"
+                await redis.client.incr(total_daily_key)
+                await redis.client.expire(total_daily_key, 86400 * 7)
+
+                hourly_key = f"hourly_count:{hour}:{country_code}"
+                await redis.client.incr(hourly_key)
+                await redis.client.expire(hourly_key, 86400)
+
+                updated.append(country_code)
+            except Exception as inner:
+                logger.warning(f"Failed to update counter for {country_code}: {inner}")
+
+        return SuccessResponse(data={
+            "updated_countries": updated,
+            "count": len(updated),
+            "period": period,
+            "source": "redis"
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update ranking counts: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update ranking counts")
 
 
 # AWS Lambda 핸들러 (배포 시 사용)
