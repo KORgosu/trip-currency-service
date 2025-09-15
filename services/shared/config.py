@@ -147,7 +147,9 @@ class ConfigManager:
                 redis_ssl=False,
                 
                 # 로컬에서는 DynamoDB Local 사용
-                dynamodb_region="us-east-1",  # DynamoDB Local
+                # LocalStack 초기화 스크립트(01-create-aws-resources.sh)는 ap-northeast-2 리전을 사용하므로
+                # 여기서도 동일한 리전을 사용하도록 ENV(AWS_REGION)과 일치시킵니다.
+                dynamodb_region=os.getenv("AWS_REGION", "ap-northeast-2"),
                 selections_table="travel_destination_selections",
                 rankings_table="RankingResults"
             ),
@@ -199,7 +201,7 @@ class ConfigManager:
                 redis_ssl=True,  # AWS에서는 SSL 사용
                 
                 # DynamoDB 설정
-                dynamodb_region=os.getenv("AWS_REGION", "ap-northeast-2"),
+                dynamodb_region=os.getenv("DYNAMODB_REGION", os.getenv("AWS_REGION", "ap-northeast-2")),
                 selections_table=os.getenv("SELECTIONS_TABLE", "travel_destination_selections"),
                 rankings_table=os.getenv("RANKINGS_TABLE", "RankingResults")
             ),
