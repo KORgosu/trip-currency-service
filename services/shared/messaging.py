@@ -13,7 +13,6 @@ import uuid
 if platform.system() == "Windows":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-<<<<<<< HEAD
 from .config import get_config, Environment
 from .exceptions import MessagingError
 
@@ -29,7 +28,6 @@ def get_logger_safe():
 # 전역 로거 초기화 (지연 로딩)
 logger = get_logger_safe()
 
-<<<<<<< HEAD
 try:
     from aiokafka import AIOKafkaProducer, AIOKafkaConsumer
     from aiokafka.errors import KafkaError
@@ -38,11 +36,6 @@ try:
 except ImportError as e:
     KAFKA_AVAILABLE = False
     logger.warning("aiokafka not available, Kafka functionality disabled", error=str(e))
-=======
-# Kafka import (실시간 서비스에서만 사용)
-KAFKA_AVAILABLE = False
-logger.info("Kafka disabled for local development, using SQS only")
->>>>>>> b7e0365 (error fix with ranking and history service)
 
 try:
     import boto3
@@ -84,7 +77,7 @@ class MessageProducer:
             self.config = get_config()
             
             # --- [핵심 수정] Kafka 사용 가능 여부를 이 시점에서 최종 결정하고 로그 기록 ---
-            self.use_kafka = KAFKA_INSTALLED and self.config.environment != Environment.LOCAL
+            self.use_kafka = KAFKA_AVAILABLE and self.config.environment != Environment.LOCAL
             
             if self.use_kafka:
                 logger.info(f"Kafka is enabled for '{self.config.environment.value}' environment.")
@@ -282,7 +275,7 @@ class MessageConsumer:
             self.config = get_config()
             
             # Kafka 컨슈머 초기화
-            if KAFKA_INSTALLED and self.config.messaging.kafka_bootstrap_servers:
+            if KAFKA_AVAILABLE and self.config.messaging.kafka_bootstrap_servers:
                 await self._init_kafka_consumer()
             
             # SQS 클라이언트 초기화 (AWS 환경에서만)

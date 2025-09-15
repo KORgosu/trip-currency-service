@@ -77,6 +77,14 @@ services:
   mysql:
     image: mysql:8.4.5
     container_name: currency-mysql
+    command: [
+      "mysqld",
+      "--character-set-server=utf8mb4",
+      "--collation-server=utf8mb4_0900_ai_ci",
+      "--skip-name-resolve",
+      "--sql-mode=STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ZERO_DATE,NO_ZERO_IN_DATE,NO_ENGINE_SUBSTITUTION",
+      "--lower_case_table_names=1"
+    ]
     environment:
       MYSQL_ROOT_PASSWORD: password
       MYSQL_DATABASE: currency_db
@@ -87,7 +95,6 @@ services:
     volumes:
       - mysql_data:/var/lib/mysql
       - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
-      - ./mysql-config/my.cnf:/etc/mysql/conf.d/my.cnf
     networks:
       - currency-network
     healthcheck:
