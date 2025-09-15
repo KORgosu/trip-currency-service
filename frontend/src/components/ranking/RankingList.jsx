@@ -101,7 +101,7 @@ const RankingList = ({ rankings, loading, error, onRefresh }) => {
           key={ranking.country_code}
           ranking={{
             countryCode: ranking.country_code,
-            score: ranking.selection_count,
+            score: ranking.selection_count ?? ranking.score ?? 0,
             trend: 'up', // 실제 데이터에서는 trend 정보가 없으므로 기본값
             change: 0    // 실제 데이터에서는 change 정보가 없으므로 기본값
           }}

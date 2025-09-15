@@ -164,10 +164,10 @@ const RankingItem = ({ ranking, position, countryName }) => {
     <ItemContainer>
       <RankNumber>{position}</RankNumber>
       
-      <TrendIndicator className={getTrendClass(ranking.trend)}>
+      {/* <TrendIndicator className={getTrendClass(ranking.trend)}>
         <span>{getTrendIcon(ranking.trend)}</span>
         <span>{ranking.change || 0}</span>
-      </TrendIndicator>
+      </TrendIndicator> */}
       
       <CountryInfo>
         <CountryFlag>{info.flag}</CountryFlag>
