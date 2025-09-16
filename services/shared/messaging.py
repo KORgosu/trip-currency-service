@@ -21,21 +21,20 @@ def get_logger_safe():
     try:
         from .logging import get_logger
         return get_logger(__name__)
-    except:
+    except Exception:
         import logging
         return logging.getLogger(__name__)
 
-# 전역 로거 초기화 (지연 로딩)
+# 전역 로거 초기화 (지연 로딩) - import 시점에는 실제 로깅을 수행하지 않음
 logger = get_logger_safe()
 
+# 선택적 의존성은 import-가능 여부만 기록하고, 실제 로그 출력은 초기화 시점에 수행
 try:
     from aiokafka import AIOKafkaProducer, AIOKafkaConsumer
     from aiokafka.errors import KafkaError
     KAFKA_AVAILABLE = True
-    logger.info("aiokafka successfully imported")
-except ImportError as e:
+except ImportError:
     KAFKA_AVAILABLE = False
-    logger.warning("aiokafka not available, Kafka functionality disabled", error=str(e))
 
 try:
     import boto3
@@ -43,7 +42,6 @@ try:
     SQS_AVAILABLE = True
 except ImportError:
     SQS_AVAILABLE = False
-    logger.warning("boto3 not available, SQS functionality disabled")
 
 
 class MessageProducer:
@@ -80,11 +78,11 @@ class MessageProducer:
             self.use_kafka = KAFKA_AVAILABLE and self.config.environment != Environment.LOCAL
             
             if self.use_kafka:
-                logger.info(f"Kafka is enabled for '{self.config.environment.value}' environment.")
+                logger.info("Kafka is enabled for environment", environment=self.config.environment.value)
                 if self.config.messaging.kafka_bootstrap_servers:
                     await self._init_kafka_producer()
             else:
-                logger.info("Kafka is disabled for this environment. SQS will be used as a fallback if available.")
+                logger.info("Kafka disabled; SQS fallback if available")
             
             if SQS_AVAILABLE: # SQS는 LocalStack을 통해 로컬에서도 사용 가능할 수 있음
                 self._init_sqs_client()

@@ -22,15 +22,19 @@ class StructuredFormatter(logging.Formatter):
     """구조화된 JSON 로그 포맷터"""
     
     def format(self, record: logging.LogRecord) -> str:
-        config = get_config()
+        # 설정이 아직 초기화되지 않은 시점에도 로깅이 가능하도록 보호
+        try:
+            config = get_config()
+        except Exception:
+            config = None
         
         # 기본 로그 엔트리
         log_entry = {
             'timestamp': datetime.utcnow().isoformat() + 'Z',
             'level': record.levelname,
-            'service': config.service_name,
-            'version': config.service_version,
-            'environment': config.environment.value,
+            'service': getattr(config, 'service_name', 'unknown'),
+            'version': getattr(config, 'service_version', 'unknown'),
+            'environment': getattr(getattr(config, 'environment', None), 'value', 'unknown'),
             'message': record.getMessage(),
             'logger': record.name,
             'module': record.module,
@@ -90,10 +94,17 @@ class StructuredLogger:
         if self._configured:
             return
 
-        from shared.config import get_config, Environment
-        config = get_config()
+        # 설정이 준비되지 않은 경우에도 안전하게 기본 로깅을 구성
+        try:
+            from shared.config import get_config, Environment
+            config = get_config()
+            level = getattr(logging, config.log_level.upper(), logging.INFO)
+            env = config.environment
+        except Exception:
+            config = None
+            level = logging.INFO
+            env = None
         
-        level = getattr(logging, config.log_level.upper(), logging.INFO)
         self.logger.setLevel(level)
         
         if self.logger.hasHandlers():
@@ -101,7 +112,13 @@ class StructuredLogger:
         
         handler = logging.StreamHandler(sys.stdout)
         
-        if config.environment == Environment.LOCAL and config.log_format != "json":
+        try:
+            from shared.config import Environment as _Env
+            is_local = (env == _Env.LOCAL)
+        except Exception:
+            is_local = True  # 설정 알 수 없을 때는 간단 포맷 사용
+        
+        if config is None or is_local and getattr(config, 'log_format', 'text') != "json":
             formatter = SimpleFormatter()
         else:
             formatter = StructuredFormatter()

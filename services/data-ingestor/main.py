@@ -40,9 +40,18 @@ if platform.system() == "Windows":
 # Docker 환경(PYTHONPATH)이 모든 경로 관리를 책임지므로,
 # 복잡한 sys.path 조작 코드를 모두 제거합니다.
 
-# 1. 필요한 모듈들을 파일 최상단에서 바로 import 합니다.
+# 1) config를 먼저 초기화해서 import 시점 로깅에도 안전하게 만듭니다.
 try:
     from shared.config import init_config
+except ImportError as e:
+    print("FATAL: Cannot import shared.config.init_config", file=sys.stderr)
+    print(f"Error: {e}", file=sys.stderr)
+    sys.exit(1)
+
+config = init_config("data-ingestor")
+
+# 2) 이후 의존 모듈들을 import합니다 (일부 모듈은 import 시 로깅이 발생할 수 있음).
+try:
     from shared.logging import get_logger, set_correlation_id
     from shared.database import init_database, get_db_manager
     from shared.utils import SecurityUtils
@@ -50,13 +59,11 @@ try:
     from app.services.data_processor import DataProcessor
     from app.scheduler import DataIngestionScheduler
 except ImportError as e:
-    # Docker 환경이 올바르게 설정되지 않았을 경우를 대비한 디버깅 로그
     print(f"FATAL: Module import failed. Check Dockerfile's PYTHONPATH and COPY instructions.", file=sys.stderr)
     print(f"Error: {e}", file=sys.stderr)
     sys.exit(1)
 
-# 2. config와 logger를 전역(global) 범위에서 초기화합니다.
-config = init_config("data-ingestor")
+# 3) logger 초기화
 logger = get_logger(__name__)
 # -------------------- [핵심 수정 부분 끝] --------------------
 

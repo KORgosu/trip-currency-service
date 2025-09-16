@@ -173,7 +173,16 @@ class ConfigManager:
                 }
             ),
             
-            cors_origins=["http://localhost:3000", "http://localhost:8000"]
+            cors_origins=[
+                "http://localhost:3000",
+                "http://localhost:8000",
+                # Vite dev server (frontend)
+                "http://localhost:5173",
+                "http://127.0.0.1:5173",
+                # Additional dev servers
+                "http://localhost:3001",
+                "http://127.0.0.1:3001"
+            ]
         )
     
     def _load_aws_config(self) -> AppConfig:
